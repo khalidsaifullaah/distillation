@@ -1,0 +1,2 @@
+ python preprocess_data.py --file_path datasets/self-instruct-val.jsonl --save_file_name datasets/self-instruct-val\(processed\).jsonl 
+ python preprocess_data.py --file_path datasets/dolly-val.jsonl --save_file_name datasets/dolly-val\(processed\).jsonl 
