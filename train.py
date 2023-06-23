@@ -99,10 +99,11 @@ def fsdp_main(rank, world_size, args):
         weight_decay=args.weight_decay, lr=args.lr,
         wrapped_class=wrapped_class, hack=args.hack)
     
-    # args.logit_distillation_mode = True
+    args.logit_distillation_mode = True
     if args.logit_distillation_mode:
         teacher_model = get_empty_model(args.teacher_model_config_path, args.added_tokens, wrapped_class, args.hack)
         teacher_model = load_state_dict_fsdp(teacher_model, args.teacher_model_init_checkpoint_path)
+        teacher_model.eval()
         # teacher_model = teacher_model.half()
 
     if args.resume:
@@ -175,13 +176,17 @@ def fsdp_main(rank, world_size, args):
             if args.logit_distillation_mode:
                 with torch.no_grad():
                     teacher_out = teacher_model(**data)
+                label_idx = torch.where(data['labels'] != -100)[-1].tolist()
+                if len(label_idx) > 0:
+                    labels = data['input_ids'][0][label_idx[0]:].tolist()
+                    teacher_out.logits[0, label_idx, labels] += args.spike_factor   # token spike
                 if args.loss_type == "kl":
                     loss_distill = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean")
                 elif args.loss_type == "reverse_kl":
                     R_t = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean") # forward KL
                     rho_t_theta = F.kl_div(F.log_softmax(teacher_out.logits/args.tmp, dim=-1), F.softmax(out.logits/args.tmp, dim=-1), reduction="batchmean") # reverse KL
                     loss_distill = R_t * torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2))
-                    print(rho_t_theta, torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2)))
+                    # print(rho_t_theta, torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2)))
                     # loss_distill = F.kl_div(F.log_softmax(teacher_out.logits/args.tmp, dim=-1), F.softmax(out.logits/args.tmp, dim=-1), reduction="batchmean")
                 elif args.loss_type == "ce":
                     # normalizing teacher logits using softmax
@@ -236,16 +241,17 @@ def fsdp_main(rank, world_size, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--init_checkpoint_path", type=str, default="/cmlscratch/khalids/dalle_mini/redpajama_3B_sharded")
-    parser.add_argument("--model_config_path", type=str, default="/cmlscratch/khalids/dalle_mini/redpajama_3B_hf")
-    parser.add_argument("--checkpoint_path", type=str, default="/cmlscratch/khalids/dalle_mini/redpajama_3B_logits_distill")
+    parser.add_argument("--init_checkpoint_path", type=str, default="/home/ksaifullah/redpajama_3B_sharded")
+    parser.add_argument("--model_config_path", type=str, default="/home/ksaifullah/redpajama_3B_hf")
+    parser.add_argument("--checkpoint_path", type=str, default="/home/ksaifullah/redpajama_3B_logits_distill")
 
-    parser.add_argument("--teacher_model_init_checkpoint_path", type=str, default="/cmlscratch/khalids/dalle_mini/redpajama_7B_chat_sharded")
-    parser.add_argument("--teacher_model_config_path", type=str, default="/cmlscratch/khalids/dalle_mini/redpajama_7B_chat_hf")
+    parser.add_argument("--teacher_model_init_checkpoint_path", type=str, default="/home/ksaifullah/redpajama_7B_chat_sharded")
+    parser.add_argument("--teacher_model_config_path", type=str, default="/home/ksaifullah/redpajama_7B_chat_hf")
     parser.add_argument("--logit_distillation_mode", action='store_true', help="whether to use logit distillation mode")
     parser.add_argument("--alpha", type=float, default=0.5, help="the weight of the distillation loss")
     parser.add_argument("--loss_type", type=str, choices=["kl", "ce", "reverse_kl"], default="kl", help="the type of loss to use for distillation")
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
+    parser.add_argument("--spike_factor", type=float, default=100.0, help="the weight of the distillation loss")
 
     parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer"], default="GPTNeoXLayer",
                         help="the name of the class that is wrapped by the FSDP module")
