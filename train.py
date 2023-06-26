@@ -15,9 +15,13 @@ from torch.distributed.elastic.multiprocessing.errors import record
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
 import transformers
+
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
+from mpt_architectures.mpt_1B.gpt_blocks import GPTBlock
+from mpt_architectures.mpt_7B_chat.blocks import MPTBlock
+
 from transformers.models.gpt_neox import GPTNeoXTokenizerFast
 from transformers.trainer_utils import seed_worker
 
@@ -27,7 +31,7 @@ from dataset import make_supervised_data_module
 from accelerate.data_loader import skip_first_batches
 import wandb
 
-from utils import get_fsdp_wrapped_empty_model, load_model_opt_scheduler_states_fsdp, load_state_dict_fsdp, save_model_opt_scheduler_states_fsdp
+from utils import get_fsdp_wrapped_empty_model, load_model_opt_scheduler_states_fsdp, load_state_dict_fsdp, save_model_opt_scheduler_states_fsdp, load_fsdp_ckpt_with_accelerate
 
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -45,7 +49,7 @@ def cleanup():
     dist.destroy_process_group()
 
 def get_empty_model(model_config_path, add_tokens=1, wrapped_class=None, hack=False):
-    model_config = transformers.AutoConfig.from_pretrained(model_config_path)
+    model_config = transformers.AutoConfig.from_pretrained(model_config_path, trust_remote_code=True)
     model_config.vocab_size += add_tokens
     return get_fsdp_wrapped_empty_model(model_config, wrapped_class, hack=hack)
 
@@ -80,15 +84,28 @@ def get_class_from_class_name(class_name):
         return OPTDecoderLayer
     elif class_name == "GPTNeoXLayer":
         return GPTNeoXLayer
+    elif class_name == "GPTBlock":
+        return GPTBlock
     else:
         raise ValueError(f"Unknown class name {class_name}")
+
+def get_clm_loss(labels, lm_logits):
+    # move labels to correct device to enable model parallelism
+    labels = labels.to(lm_logits.device)
+    # Shift so that tokens < n predict n
+    shift_logits = lm_logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    # Flatten the tokens
+    loss_fct = torch.nn.CrossEntropyLoss()
+    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    return loss
 
 @record
 def fsdp_main(rank, world_size, args):
     setup(rank, world_size, args.port) 
     if rank == 0:
         if args.wandb:
-            wandb.init(project=args.wb_project, entity=args.wandb_entity, name=args.wb_name, config=args, resume=args.resume, id=args.wb_id)
+            wandb.init(project=args.wb_project, entity=args.wandb_entity, name=args.wb_name, config=args, resume=args.resume)
     
     torch.cuda.set_device(rank)
     wrapped_class = get_class_from_class_name(args.wrapped_class_name)
@@ -99,9 +116,13 @@ def fsdp_main(rank, world_size, args):
         weight_decay=args.weight_decay, lr=args.lr,
         wrapped_class=wrapped_class, hack=args.hack)
     
-    args.logit_distillation_mode = True
+    # args.logit_distillation_mode = True
     if args.logit_distillation_mode:
-        teacher_model = get_empty_model(args.teacher_model_config_path, args.added_tokens, wrapped_class, args.hack)
+        if args.wrapped_class_name == "GPTBlock":
+            teacher_wrapped_class = MPTBlock    # this is a hack to make the teacher model work with the MPT 1B model
+        else:
+            teacher_wrapped_class = wrapped_class
+        teacher_model = get_empty_model(args.teacher_model_config_path, args.added_tokens, teacher_wrapped_class, args.hack)
         teacher_model = load_state_dict_fsdp(teacher_model, args.teacher_model_init_checkpoint_path)
         teacher_model.eval()
         # teacher_model = teacher_model.half()
@@ -110,6 +131,7 @@ def fsdp_main(rank, world_size, args):
         model, opt, scheduler, start_step_count = load_model_opt_scheduler_states_fsdp(model, opt, scheduler, args.checkpoint_path)
     else:
         model = load_state_dict_fsdp(model, args.init_checkpoint_path)
+        # model = load_fsdp_ckpt_with_accelerate(args.init_checkpoint_path, args.model_config_path, args.model_config_path, wrapped_class)
         start_step_count = 0
 
     if args.act_checkpointing:
@@ -118,10 +140,12 @@ def fsdp_main(rank, world_size, args):
             model, check_fn=check_fn
         )
     
-    if args.wrapped_class_name == "GPTNeoXLayer":
-        tokenizer = GPTNeoXTokenizerFast.from_pretrained(args.model_config_path,
-                                                     model_max_length=512,
-                                                     padding_side="right")
+    if args.wrapped_class_name == "GPTNeoXLayer" or args.wrapped_class_name == "GPTBlock" or args.wrapped_class_name == "MPTBlock":
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+                args.model_config_path,
+                model_max_length=512,
+                padding_side="right",
+            )
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
@@ -172,7 +196,8 @@ def fsdp_main(rank, world_size, args):
                 epoch_iterator = iter(dataloader)
                 data = next(epoch_iterator)
             # calculate loss and backward
-            out = model(**data)
+            # out = model(**data)
+            out = model(input_ids=data['input_ids'], attention_mask=data['attention_mask'])
             if args.logit_distillation_mode:
                 with torch.no_grad():
                     teacher_out = teacher_model(**data)
@@ -194,10 +219,10 @@ def fsdp_main(rank, world_size, args):
                     # print(loss_distill)
                 else:
                     raise ValueError(f"Unknown loss type {args.loss_type}")
-                loss_clm = out.loss
+                loss_clm = get_clm_loss(data['labels'], out.logits)
                 loss = args.alpha * loss_distill + (1-args.alpha) * loss_clm
             else:
-                loss = out.loss
+                loss = get_clm_loss(data['labels'], out.logits)
             # print(loss)
             (loss/accumulation_steps).backward()
             train_loss += loss.item()/accumulation_steps
@@ -251,9 +276,10 @@ if __name__ == '__main__':
     parser.add_argument("--alpha", type=float, default=0.5, help="the weight of the distillation loss")
     parser.add_argument("--loss_type", type=str, choices=["kl", "ce", "reverse_kl"], default="kl", help="the type of loss to use for distillation")
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
-    parser.add_argument("--spike_factor", type=float, default=100.0, help="the weight of the distillation loss")
+    parser.add_argument("--spike_factor", type=float, default=0.0, help="the weight of the distillation loss")
+    parser.add_argument("--no_dist", action='store_true')
 
-    parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer"], default="GPTNeoXLayer",
+    parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer", "GPTBlock", "MPTBlock"], default="GPTBlock",
                         help="the name of the class that is wrapped by the FSDP module")
     parser.add_argument("--dont_save_opt",action='store_true', help="dont save optimizer and scheduler, this saves hard disk memory by trading off ability to resume the run")
     parser.add_argument("--added_tokens", type=int, default=1)
