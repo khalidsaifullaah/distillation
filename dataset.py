@@ -23,6 +23,7 @@ from typing import Optional, Dict, Sequence
 import torch
 import transformers
 from torch.utils.data import Dataset
+from datasets import load_dataset
 
 IGNORE_INDEX = -100
 PROMPT_DICT = {
@@ -90,9 +91,36 @@ from io_utils import read_jsonlines
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, data_fraction: float=1.0, seed: int=42):
+    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False):
         super().__init__()
         logging.warning("Loading data...")
+        if efficient_load:
+            data_dict = load_dataset('json', data_files=data_path, split='train')
+            used_data_count = int(len(data_dict)*data_fraction)
+            data_dict = data_dict.select(range(used_data_count))
+            print(f"using {used_data_count} data out of {len(data_dict)}")
+            columns = data_dict.column_names
+            # changing column names
+            if columns[0] != 'instruction':
+                data_dict = data_dict.rename_column(columns[0], 'instruction')
+            if columns[1] != 'input':
+                data_dict = data_dict.rename_column(columns[1], 'input')
+            if columns[2] != 'output':
+                data_dict = data_dict.rename_column(columns[2], 'output')
+            logging.warning("Formatting inputs...")
+            prompt_input, prompt_no_input = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"]
+            def _format_data(examples):
+                output = []
+                for row in zip(examples["instruction"], examples["input"], examples["output"]):
+                    examples = {"instruction": row[0], "input": row[1], "output": row[2]}
+                    if examples.get("input", "") != "":
+                        output += [prompt_input.format_map(examples)]
+                    else:
+                        output += [prompt_no_input.format_map(examples)]
+                return {"source": output}
+            self.sources = data_dict.map(_format_data, remove_columns=data_dict.column_names, batched=True)['source']
+            self.targets = data_dict.map(lambda examples: {"target": [f"{example}{tokenizer.eos_token}" for example in examples['output']]}, remove_columns=data_dict.column_names, batched=True)['target']
+            return
         if "dolly" in data_path:
             list_data_dict = read_jsonlines(data_path)
             list_data_dict = list(list_data_dict)
@@ -123,10 +151,12 @@ class SupervisedDataset(Dataset):
         self.labels = data_dict["labels"]
 
     def __len__(self):
-        return len(self.input_ids)
+        # return len(self.input_ids)
+        return len(self.sources)
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        return dict(input_ids=self.input_ids[i], labels=self.labels[i])
+        # return dict(input_ids=self.input_ids[i], labels=self.labels[i])
+        return dict(sources=self.sources[i], targets=self.targets[i])
 
 @dataclass
 class DataCollatorForSupervisedDataset:
@@ -135,7 +165,14 @@ class DataCollatorForSupervisedDataset:
     tokenizer: transformers.PreTrainedTokenizer
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
+        sources = []
+        targets = []
+        for instance in instances:
+            sources.append(instance['sources'])
+            targets.append(instance['targets'])
+        instances = preprocess(sources, targets, self.tokenizer)
+        # input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels"))
+        input_ids, labels = tuple((instances['input_ids'], instances['labels']))
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
         )
@@ -146,8 +183,8 @@ class DataCollatorForSupervisedDataset:
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
 
-def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_path, data_fraction: float=1.0, seed: int=42) -> Dict:
+def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_path, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    train_dataset = SupervisedDataset(tokenizer=tokenizer, data_path=data_path, data_fraction=data_fraction, seed=seed)
+    train_dataset = SupervisedDataset(tokenizer=tokenizer, data_path=data_path, data_fraction=data_fraction, seed=seed, efficient_load=efficient_load)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)

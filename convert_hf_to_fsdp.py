@@ -2,6 +2,7 @@
 import argparse
 import transformers
 import torch.distributed._shard.checkpoint as dist_cp
+from utils import make_nonpersistent_buffer_persistent
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -12,7 +13,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default=None, help="This can be used to store the HF model in a different location than the default if using hf path as opposed to local directory")
     args = parser.parse_args()
 
-    model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, cache_dir=args.cache_dir)
+    model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, cache_dir=args.cache_dir, trust_remote_code=True)
     model = model.to(model.config.torch_dtype) # from_pretrained does not load model weights to the default type, so we have to do it manually
     if args.add_tokens > 0:
         model.resize_token_embeddings(model.config.vocab_size + args.add_tokens)
@@ -30,6 +31,9 @@ if __name__ == "__main__":
         model.save_pretrained(args.save_path_hf)
         transformers.AutoTokenizer.from_pretrained(args.load_path, cache_dir=args.cache_dir).save_pretrained(args.save_path_hf)
         
+    # by making nonpersistent buffer persistent, state_dict now includes the original nonpersistent buffer values,
+    # which can be used to override the incorrect nonpersistent buffer when initializing the model directly on gpu
+    make_nonpersistent_buffer_persistent(model)
     dist_cp.save_state_dict(
         state_dict=model.state_dict(),
         storage_writer=dist_cp.FileSystemWriter(args.save_path),

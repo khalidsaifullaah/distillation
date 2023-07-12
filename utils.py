@@ -12,6 +12,13 @@ import torch
 from torch.distributed.fsdp.wrap import (
     transformer_auto_wrap_policy,
 )
+
+from torch.distributed.fsdp.wrap import (
+    size_based_auto_wrap_policy,
+    enable_wrap,
+    wrap,
+)
+
 import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardedStateDictConfig, MixedPrecision
 from torch.distributed.fsdp.api import StateDictType
@@ -33,10 +40,15 @@ def get_gpu_memory_usage(rank):
 def get_fsdp_wrapped_empty_model(model_config, wrapped_cls, hack=False):
     with init_empty_weights():
         if hack:
-            model = transformers.AutoModelForCausalLM.from_config(model_config).bfloat16()
+            model = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).bfloat16()
         else:
-            model = transformers.AutoModelForCausalLM.from_config(model_config)
+            model = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
 
+    # this ensures that the nonpersistent buffer are overriden by the saved values, when loading the model
+    make_nonpersistent_buffer_persistent(model)
+
+    if "mpt" in model_config._name_or_path:
+        wrapped_cls = model.transformer.blocks[0].__class__
     # hack to make the model wrappable by FSDP
     model.reset_parameters = lambda: None
     wrapped_cls.reset_parameters = lambda x: None
@@ -46,6 +58,9 @@ def get_fsdp_wrapped_empty_model(model_config, wrapped_cls, hack=False):
         transformer_auto_wrap_policy,
         transformer_layer_cls=set([wrapped_cls]),
     )
+    # my_auto_wrap_policy = functools.partial(
+    #     size_based_auto_wrap_policy, min_num_params=20000
+    # )
     bf16 = MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
     model = FSDP(model, auto_wrap_policy=my_auto_wrap_policy, device_id=torch.cuda.current_device(), mixed_precision=bf16)
     return model
@@ -56,8 +71,9 @@ def load_fsdp_ckpt_with_accelerate(fsdp_path, model_config, hf_dummy_path, wrapp
     # memories. The weights will later be overwritten by the checkpoint from fsdp_path.
     # one requirement is that the hf_dummy_path has to have the same shape as the checkpoint in the fsdp_path
     with init_empty_weights():
-        model_empty = transformers.AutoModelForCausalLM.from_config(model_config)
+        model_empty = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
         model_empty = model_empty.bfloat16()
+
     model = load_checkpoint_and_dispatch(model_empty, hf_dummy_path, device_map="auto", no_split_module_classes=[wrapped_class])
     # this is a hack
     # the model weights in hf_dummy_path may have a different vocab size than the desired fsdp model we are trying to 
@@ -90,13 +106,21 @@ def load_state_dict_fsdp(model, load_path, offload_to_cpu=True, no_dist=False):
             model.load_state_dict(checkpoint)
     return model
 
-def save_state_dict_fsdp(model, save_path, offload_to_cpu=True):
-    with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT, ShardedStateDictConfig(offload_to_cpu=offload_to_cpu)):
+def save_state_dict_fsdp(model, save_path, offload_to_cpu=True, no_dist=False):
+    if no_dist:
         checkpoint = model.state_dict()
         dist_cp.save_state_dict(
             state_dict=checkpoint,
             storage_writer=dist_cp.FileSystemWriter(save_path),
+            no_dist=no_dist
         )
+    else:
+        with FSDP.state_dict_type(model, StateDictType.SHARDED_STATE_DICT, ShardedStateDictConfig(offload_to_cpu=offload_to_cpu)):
+            checkpoint = model.state_dict()
+            dist_cp.save_state_dict(
+                state_dict=checkpoint,
+                storage_writer=dist_cp.FileSystemWriter(save_path),
+            )
     return model
 
 def save_model_to_fsdp_format(model, save_path):
@@ -117,11 +141,11 @@ def load_opt_or_scheduler_fsdp(model, opt, save_path, rank, offload_to_cpu=True)
         state_dict = torch.load(os.path.join(save_path, f"shard{rank}.pt"))
         opt.load_state_dict(state_dict)
 
-def save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, checkpoint_path, rank, dont_save_opt=False):
+def save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, checkpoint_path, rank, dont_save_opt=False, no_dist=False):
     # TODO: remove rank arguments in this function
     # for component, name in [[model, "model"], [opt, "opt"], [scheduler, "scheduler"]]:
     path = os.path.join(checkpoint_path, str(step_count), "model")
-    save_state_dict_fsdp(model, path)
+    save_state_dict_fsdp(model, path, no_dist=no_dist)
     if not dont_save_opt:
         path = os.path.join(checkpoint_path, str(step_count), "opt")
         os.makedirs(path, exist_ok=True)
@@ -172,6 +196,17 @@ def cleanup():
 def get_all_existing_loggers():
     return logging.Logger.manager.loggerDict.values()
 
+def make_nonpersistent_buffer_persistent(model):
+    """FSDP does not appropriately handle non-persistent buffers when the weights are initialized on gpu
+    We make the these buffer persistent, so that these buffers are written to disk when saving the model
+    and can be used to override the incorrect non-persistent buffers when loading the model
+    """
+    for name, module in model.named_modules():
+        if hasattr(module, "_non_persistent_buffers_set") and len(module._non_persistent_buffers_set) > 0:
+            print(f"moving non-persistent buffers to persistent buffers for module {name}")
+            module._persistent_buffers_set = module._non_persistent_buffers_set
+            module._non_persistent_buffers_set = set()
+
 class LogLevelContext:
     def __init__(self, level):
         self.level = level
@@ -187,4 +222,10 @@ class LogLevelContext:
         for logger, original_level in self.original_levels.items():
             logger.setLevel(original_level)
 
-
+# from datasets import load_dataset
+# # load ehartford/dolphin dataset from huggingface
+# dataset = load_dataset("ehartford/dolphin", split="train")
+# # select the first 1000 samples
+# # dataset = dataset.select(range(1000))
+# # save the dataset in .jsonl format
+# dataset.to_json(f"datasets/dolphin.jsonl")

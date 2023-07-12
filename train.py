@@ -116,7 +116,6 @@ def fsdp_main(rank, world_size, args):
         weight_decay=args.weight_decay, lr=args.lr,
         wrapped_class=wrapped_class, hack=args.hack)
     
-    # args.logit_distillation_mode = True
     if args.logit_distillation_mode:
         if args.wrapped_class_name == "GPTBlock":
             teacher_wrapped_class = MPTBlock    # this is a hack to make the teacher model work with the MPT 1B model
@@ -143,7 +142,8 @@ def fsdp_main(rank, world_size, args):
     if args.wrapped_class_name == "GPTNeoXLayer" or args.wrapped_class_name == "GPTBlock" or args.wrapped_class_name == "MPTBlock":
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
-                model_max_length=512,
+                # model_max_length=model.config.max_seq_len,
+                model_max_length=1024,
                 padding_side="right",
             )
     else:
@@ -165,11 +165,11 @@ def fsdp_main(rank, world_size, args):
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
     tokenizer.add_special_tokens(special_tokens_dict) # no need to resize model embedding because its been resized during empty model loading
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed, efficient_load=True)
     train_dataset = data_module['train_dataset']
     data_collator = data_module['data_collator']
     dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
-    
+    # next(iter(dataloader_full)) # this is to make sure that the dataloader is initialized properly
     # updating the dataloader to the right state
     step_count = start_step_count
     sub_step_count = step_count * args.accumulation_steps
@@ -183,6 +183,17 @@ def fsdp_main(rank, world_size, args):
     save_steps = args.save_steps
     epoch_iterator = iter(dataloader)
     start_time = time.time()
+
+    def bergman_divergence(x, y, z):
+        # term1 = -x / (1 + z * x)
+        # term2 = x / ((1 + z * y) ** 2)
+        # divergence = torch.sum(term1 + term2)
+        term1 = -x / (1 + z * x)
+        term2 = y / (1 + z * y)
+        term3 = (x-y) / ((1 + z * y) ** 2)
+        divergence = torch.sum(term1 + term2 + term3)
+        return divergence
+
     for step_count in range(start_step_count, args.max_steps):
         train_loss = 0
         logit_distill_loss = 0
@@ -197,22 +208,52 @@ def fsdp_main(rank, world_size, args):
                 data = next(epoch_iterator)
             # calculate loss and backward
             # out = model(**data)
-            out = model(input_ids=data['input_ids'], attention_mask=data['attention_mask'])
+            out = model(input_ids=data['input_ids'], attention_mask=data['attention_mask'], output_attentions=True, output_hidden_states=True, return_dict=True)
             if args.logit_distillation_mode:
                 with torch.no_grad():
-                    teacher_out = teacher_model(**data)
+                    teacher_out = teacher_model(**data, output_attentions=True, output_hidden_states=True, return_dict=True)
                 label_idx = torch.where(data['labels'] != -100)[-1].tolist()
                 if len(label_idx) > 0:
                     labels = data['input_ids'][0][label_idx[0]:].tolist()
                     teacher_out.logits[0, label_idx, labels] += args.spike_factor   # token spike
                 if args.loss_type == "kl":
-                    loss_distill = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean")
+                    # loss_distill = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean")
+                    P = F.softmax(teacher_out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    log_p = F.log_softmax(teacher_out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    log_q = F.log_softmax(out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    x = torch.sum(P * (log_p - log_q), dim=-1).view(-1)
+                    mask = (data['labels'] != -100).cuda().int()
+                    loss_distill = torch.mean(x * mask.view(-1), dim=0)
+                elif args.loss_type == "bergman_div":
+                    loss_distill = bergman_divergence(F.softmax(out.logits, dim=-1, dtype=torch.float32), F.softmax(teacher_out.logits, dim=-1, dtype=torch.float32), args.tmp)
+                elif args.loss_type == "reverse_bergman_div":
+                    loss_distill = bergman_divergence(F.softmax(teacher_out.logits, dim=-1, dtype=torch.float32), F.softmax(out.logits, dim=-1, dtype=torch.float32), args.tmp)
                 elif args.loss_type == "reverse_kl":
-                    R_t = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean") # forward KL
-                    rho_t_theta = F.kl_div(F.log_softmax(teacher_out.logits/args.tmp, dim=-1), F.softmax(out.logits/args.tmp, dim=-1), reduction="batchmean") # reverse KL
-                    loss_distill = R_t * torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2))
-                    # print(rho_t_theta, torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2)))
-                    # loss_distill = F.kl_div(F.log_softmax(teacher_out.logits/args.tmp, dim=-1), F.softmax(out.logits/args.tmp, dim=-1), reduction="batchmean")
+                    # from paper
+                    # R_t = F.kl_div(F.log_softmax(out.logits/args.tmp, dim=-1), F.softmax(teacher_out.logits/args.tmp, dim=-1), reduction="batchmean") # forward KL
+                    # rho_t_theta = F.kl_div(F.log_softmax(teacher_out.logits/args.tmp, dim=-1), F.softmax(out.logits/args.tmp, dim=-1), reduction="batchmean") # reverse KL
+                    # loss_distill = R_t * torch.min(rho_t_theta, torch.clamp(rho_t_theta, 1-0.2, 1+0.2))
+                    
+                    # from miniLLM repo
+                    teacher_probs = F.softmax(teacher_out.logits, dim=-1, dtype=torch.float32)
+                    inf_mask = torch.isinf(out.logits)
+                    logprobs = F.log_softmax(out.logits, dim=-1, dtype=torch.float32)
+                    prod_probs = torch.masked_fill(teacher_probs * logprobs, inf_mask, 0)
+                    x = torch.sum(prod_probs, dim=-1).view(-1)
+                    mask = (data['labels'] != -100).cuda().int()
+                    if torch.sum(mask.view(-1), dim=0).item() == 0:
+                        print("mask is all zero")
+                        loss_distill = -torch.sum(x * mask.view(-1), dim=0) / 1.0
+                    else:    
+                        loss_distill = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
+
+                    # manual implementation of reverse KL
+                    # P = F.softmax(out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    # log_p = F.log_softmax(out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    # log_q = F.log_softmax(teacher_out.logits/args.tmp, dim=-1, dtype=torch.float32)
+                    # x = torch.sum(P * (log_p - log_q), dim=-1).view(-1)
+                    # mask = (data['labels'] != -100).cuda().int()
+                    # loss_distill = torch.mean(x * mask.view(-1), dim=0)
                 elif args.loss_type == "ce":
                     # normalizing teacher logits using softmax
                     loss_distill = torch.sum(F.softmax(teacher_out.logits, dim=-1) * (-1 *F.log_softmax(out.logits, dim=-1)))
@@ -274,7 +315,7 @@ if __name__ == '__main__':
     parser.add_argument("--teacher_model_config_path", type=str, default="/home/ksaifullah/redpajama_7B_chat_hf")
     parser.add_argument("--logit_distillation_mode", action='store_true', help="whether to use logit distillation mode")
     parser.add_argument("--alpha", type=float, default=0.5, help="the weight of the distillation loss")
-    parser.add_argument("--loss_type", type=str, choices=["kl", "ce", "reverse_kl"], default="kl", help="the type of loss to use for distillation")
+    parser.add_argument("--loss_type", type=str, choices=["kl", "ce", "reverse_kl", "bergman_div", "reverse_bergman_div"], default="kl", help="the type of loss to use for distillation")
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
     parser.add_argument("--spike_factor", type=float, default=0.0, help="the weight of the distillation loss")
     parser.add_argument("--no_dist", action='store_true')

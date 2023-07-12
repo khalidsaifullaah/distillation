@@ -74,7 +74,7 @@ if __name__ == "__main__":
         special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
     if tokenizer.unk_token is None:
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
-    tokenizer.add_special_tokens(special_tokens_dict) 
+    tokenizer.add_special_tokens(special_tokens_dict)
     
     ## set the models to eval mode
     model = model.eval()

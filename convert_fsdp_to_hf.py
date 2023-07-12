@@ -13,11 +13,12 @@ if __name__ == "__main__":
     parser.add_argument("--config_path", type=str, default="/fs/nexus-scratch/pchiang/llama/7B_hf")
     args = parser.parse_args()
 
-    model_config = transformers.AutoConfig.from_pretrained(args.config_path)
+    model_config = transformers.AutoConfig.from_pretrained(args.config_path, trust_remote_code=True)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.config_path, trust_remote_code=True)
     if "llama" in args.config_path:
         model = LlamaForCausalLM(model_config).bfloat16()
     else:
-        model = transformers.AutoModelForCausalLM.from_config(model_config).bfloat16()
+        model = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).bfloat16()
     if args.added_tokens > 0:
         model.resize_token_embeddings(model.config.vocab_size + args.added_tokens)
 
@@ -29,4 +30,5 @@ if __name__ == "__main__":
     )
     model.load_state_dict(state_dict)
     model.save_pretrained(args.save_path)
+    tokenizer.save_pretrained(args.save_path)
     
