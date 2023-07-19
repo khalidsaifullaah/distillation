@@ -33,6 +33,9 @@ import wandb
 
 from utils import get_fsdp_wrapped_empty_model, load_model_opt_scheduler_states_fsdp, load_state_dict_fsdp, save_model_opt_scheduler_states_fsdp, load_fsdp_ckpt_with_accelerate
 
+torch.backends.cuda.matmul.allow_tf32 = True  # For faster matmul (but less precise)
+torch.backends.cudnn.benchmark = True  # To automate cudnn kernel choice
+
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "<s>"
@@ -51,6 +54,8 @@ def cleanup():
 def get_empty_model(model_config_path, add_tokens=1, wrapped_class=None, hack=False):
     model_config = transformers.AutoConfig.from_pretrained(model_config_path, trust_remote_code=True)
     model_config.vocab_size += add_tokens
+    if "mpt" in model_config_path:
+        model_config.attn_config['attn_impl'] = 'triton'
     return get_fsdp_wrapped_empty_model(model_config, wrapped_class, hack=hack)
 
 def get_model_opt_scheduler(added_tokens, model_config_path, max_steps=1000, warmup_ratio=0.03, weight_decay=0.0, lr=2e-5, wrapped_class=None, hack=False):
@@ -143,20 +148,23 @@ def fsdp_main(rank, world_size, args):
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
                 # model_max_length=model.config.max_seq_len,
-                model_max_length=1024,
+                model_max_length=2048,
                 padding_side="right",
             )
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
-                model_max_length=512,
+                model_max_length=1024,
                 padding_side="right",
-                use_fast=False,
+                # use_fast=False,
             )
     
     special_tokens_dict = dict()
     if tokenizer.pad_token is None:
-        special_tokens_dict["pad_token"] = tokenizer.eos_token
+        if "mpt" in args.model_config_path:
+            special_tokens_dict["pad_token"] = tokenizer.eos_token
+        else:
+            special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
     if tokenizer.eos_token is None:
         special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
     if tokenizer.bos_token is None:
@@ -170,6 +178,8 @@ def fsdp_main(rank, world_size, args):
     data_collator = data_module['data_collator']
     dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
     # next(iter(dataloader_full)) # this is to make sure that the dataloader is initialized properly
+    args.max_steps = (len(dataloader_full) * args.num_epochs)//(args.batch_size*world_size*args.accumulation_steps)
+    args.save_steps = ((len(dataloader_full) * args.num_epochs)/(args.batch_size*world_size*args.accumulation_steps))//10
     # updating the dataloader to the right state
     step_count = start_step_count
     sub_step_count = step_count * args.accumulation_steps
@@ -208,10 +218,10 @@ def fsdp_main(rank, world_size, args):
                 data = next(epoch_iterator)
             # calculate loss and backward
             # out = model(**data)
-            out = model(input_ids=data['input_ids'], attention_mask=data['attention_mask'], output_attentions=True, output_hidden_states=True, return_dict=True)
+            out = model(input_ids=data['input_ids'], attention_mask=data['attention_mask'], output_attentions=args.use_attention_scores, output_hidden_states=args.use_hidden_states, return_dict=True)
             if args.logit_distillation_mode:
                 with torch.no_grad():
-                    teacher_out = teacher_model(**data, output_attentions=True, output_hidden_states=True, return_dict=True)
+                    teacher_out = teacher_model(**data, output_attentions=args.use_attention_scores, output_hidden_states=args.use_hidden_states, return_dict=True)
                 label_idx = torch.where(data['labels'] != -100)[-1].tolist()
                 if len(label_idx) > 0:
                     labels = data['input_ids'][0][label_idx[0]:].tolist()
@@ -319,6 +329,9 @@ if __name__ == '__main__':
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
     parser.add_argument("--spike_factor", type=float, default=0.0, help="the weight of the distillation loss")
     parser.add_argument("--no_dist", action='store_true')
+    parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--use_hidden_states", action='store_true')
+    parser.add_argument("--use_attention_scores", action='store_true')
 
     parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer", "GPTBlock", "MPTBlock"], default="GPTBlock",
                         help="the name of the class that is wrapped by the FSDP module")
