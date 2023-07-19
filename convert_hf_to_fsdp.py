@@ -14,9 +14,13 @@ if __name__ == "__main__":
     parser.add_argument("--auth_token", type=str, default=None, help="To access private models on huggingface, you need to provide an auth token")
     args = parser.parse_args()
     if args.auth_token is not None:
-        model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, cache_dir=args.cache_dir, trust_remote_code=True, use_auth_token=args.auth_token)
+        config = transformers.AutoConfig.from_pretrained(args.load_path, trust_remote_code=True, use_auth_token=args.auth_token)
+        if "mpt" in args.load_path:
+            config.attn_config['attn_impl'] = 'triton'
+        model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, config=config, cache_dir=args.cache_dir, trust_remote_code=True, use_auth_token=args.auth_token)
     else:
-        model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, cache_dir=args.cache_dir, trust_remote_code=True)
+        config = transformers.AutoConfig.from_pretrained(args.load_path, trust_remote_code=True)
+        model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, config=config, cache_dir=args.cache_dir, trust_remote_code=True)
     model = model.to(model.config.torch_dtype) # from_pretrained does not load model weights to the default type, so we have to do it manually
     if args.add_tokens > 0:
         model.resize_token_embeddings(model.config.vocab_size + args.add_tokens)
