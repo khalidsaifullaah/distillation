@@ -14,7 +14,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = transformers.AutoConfig.from_pretrained(args.load_path, trust_remote_code=True)
-    config.attn_config['attn_impl'] = 'triton'
+    if "mpt" in args.load_path:
+        config.attn_config['attn_impl'] = 'triton'
     model = transformers.AutoModelForCausalLM.from_pretrained(args.load_path, config=config, cache_dir=args.cache_dir, trust_remote_code=True)
     model = model.to(model.config.torch_dtype) # from_pretrained does not load model weights to the default type, so we have to do it manually
     if args.add_tokens > 0:
