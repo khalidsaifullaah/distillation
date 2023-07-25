@@ -48,7 +48,8 @@ def jload(f, mode="r"):
 
 files = os.listdir('outputs')
 files = [file for file in files if file.endswith('.jsonl')]
-files.sort()
+# sorting file names based on a number in the file name
+files = sorted(files, key=lambda x: int(x.split('-')[0].split('_')[-1]))
 datasets = [load_dataset('json', data_files=f"outputs/{file}", split='train') for file in files]
 
 # concatenate all datasets
@@ -66,6 +67,6 @@ for i in tqdm(range(len(org_dataset))):
     else:
         org_dataset[i]['output'] = dataset[i]['output']
 
-jdump(org_dataset, "./datasets/mpt_chat_data.jsonl")
+jdump(org_dataset, "./datasets/llama_chat_data.jsonl")
 # from IPython import embed; embed()
 

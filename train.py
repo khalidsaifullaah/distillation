@@ -173,7 +173,7 @@ def fsdp_main(rank, world_size, args):
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
     tokenizer.add_special_tokens(special_tokens_dict) # no need to resize model embedding because its been resized during empty model loading
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed, efficient_load=True)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed, efficient_load=True, filtering_method=args.filtering_method)
     train_dataset = data_module['train_dataset']
     data_collator = data_module['data_collator']
     dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
@@ -332,6 +332,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--use_hidden_states", action='store_true')
     parser.add_argument("--use_attention_scores", action='store_true')
+    parser.add_argument("--filtering_method", type=str, choices=["random", "cluster"], default="random")
 
     parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer", "GPTBlock", "MPTBlock"], default="GPTBlock",
                         help="the name of the class that is wrapped by the FSDP module")

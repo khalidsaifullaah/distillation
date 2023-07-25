@@ -78,10 +78,11 @@ def generate_response_non_batched(example, model, tokenizer, template_type, kwar
                             max_length=tokenizer.model_max_length,
                             truncation=True,
                         )
-    encoding = encoding.to(model.device)
+    encoding.pop('token_type_ids', None)
+    encoding = {k: v.cuda() for k,v in encoding.items()}
     with torch.no_grad():
         model_output = model.generate(**encoding, **kwargs)
-        input_len = encoding.input_ids.shape[-1]
+        input_len = encoding['input_ids'].shape[-1]
         model_output = model_output[:, input_len:].cpu()
         # decoded_output = tokenizer.batch_decode(model_output, skip_special_tokens=True, clean_up_tokenization_spaces=False)
         decoded_output = tokenizer.decode(model_output[0], skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -93,12 +94,12 @@ def generate_response_non_batched(example, model, tokenizer, template_type, kwar
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/cmlscratch/khalids/dalle_mini/mpt_7B_chat_sharded", type=str)
-    parser.add_argument("--hf_path", default="/cmlscratch/khalids/dalle_mini/mpt_7B_chat_hf", type=str)
+    parser.add_argument("--model", default="../llama2_13B_chat_sharded", type=str)
+    parser.add_argument("--hf_path", default="../llama2_13B_chat_hf", type=str)
     parser.add_argument("--template_type", default="alpaca", type=str)
-    parser.add_argument("--wrapped_class", default="MPTBlock", type=str)
+    parser.add_argument("--wrapped_class", default="LlamaDecoderLayer", type=str)
     parser.add_argument("--file_path", default="datasets/alpaca-train.jsonl", type=str)
-    parser.add_argument("--save_file_name", default="outputs/MPT_7B_chat_alpaca.jsonl", type=str)
+    parser.add_argument("--save_file_name", default="outputs/llama_13B_chat_alpaca.jsonl", type=str)
     parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
     parser.add_argument("--parallelize", action='store_true', help="Helps you run multiple jobs in parallel on different chunks of data.")
@@ -110,20 +111,20 @@ if __name__ == "__main__":
     # if "llama" in args.model:
     #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
 
-    config = transformers.AutoConfig.from_pretrained(args.hf_path, trust_remote_code=True)
-    config.vocab_size += 1
-    with init_empty_weights():
-        model = transformers.AutoModelForCausalLM.from_config(config, torch_dtype=torch.float16, trust_remote_code=True)
-    model.tie_weights()
-    model = load_checkpoint_and_dispatch(
-        model, args.hf_path, device_map="auto", dtype="float16", no_split_module_classes=["MPTBlock"]
-    )
-
+    # config = transformers.AutoConfig.from_pretrained(args.hf_path, trust_remote_code=True)
+    # config.vocab_size += 1
+    # with init_empty_weights():
+    #     model = transformers.AutoModelForCausalLM.from_config(config, torch_dtype=torch.float16, trust_remote_code=True)
+    # model.tie_weights()
+    # model = load_checkpoint_and_dispatch(
+    #     model, args.hf_path, device_map="auto", dtype="float16", no_split_module_classes=[args.wrapped_class]
+    # )
+    model = transformers.AutoModelForCausalLM.from_pretrained(args.hf_path, torch_dtype=torch.float16, trust_remote_code=True).cuda()
     # model = load_fsdp_ckpt_with_accelerate(args.model, model_config, hf_dummy_path=args.dummy_path, wrapped_class=args.wrapped_class)
     
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             args.hf_path,
-            model_max_length=config.max_seq_len,
+            model_max_length=2048,
             padding_side="left",
             # use_fast=False,
     )
@@ -166,8 +167,8 @@ if __name__ == "__main__":
         question_sources = "alpaca"
 
     ## run generation
-    generate_kwargs = dict(max_length=1024, do_sample=True, top_p=0.95, top_k=50,
-                           num_return_sequences=1, temperature=1.0, 
+    generate_kwargs = dict(max_length=1024, do_sample=True, top_p=0.9, top_k=50,
+                           num_return_sequences=1, temperature=0.6, 
                            stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
     # generate = partial(generate_responses_batched, 
     #                    model=model,  

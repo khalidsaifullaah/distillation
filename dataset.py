@@ -19,11 +19,13 @@ import logging
 import random
 from dataclasses import dataclass
 from typing import Optional, Dict, Sequence
+import pickle
 
 import torch
 import transformers
 from torch.utils.data import Dataset
 from datasets import load_dataset
+from datasets import Dataset as HFDataset
 
 IGNORE_INDEX = -100
 PROMPT_DICT = {
@@ -91,13 +93,35 @@ from io_utils import read_jsonlines
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False):
+    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False, filtering_method: str='random'):
         super().__init__()
         logging.warning("Loading data...")
         if efficient_load:
             data_dict = load_dataset('json', data_files=data_path, split='train')
             used_data_count = int(len(data_dict)*data_fraction)
-            data_dict = data_dict.select(range(used_data_count))
+            if filtering_method == 'random':
+                data_dict = data_dict.select(range(used_data_count))
+            elif filtering_method == 'cluster':
+                print("filtering data based on clusters")
+                with open('clusters.pkl', 'rb') as f:
+                    clusters = pickle.load(f)
+                random.seed(seed)
+                sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
+                filtered_data = {
+                    'instruction': [],
+                    'input': [],
+                    'output': []
+                }
+                for c in sampled_clusters:
+                    idx = random.sample(range(len(clusters[c])), 1)[0]
+                    sample_id = int(clusters[c][idx][0])  # getting the int from numpy.int64
+                    filtered_data['instruction'].append(data_dict[sample_id]['instruction'])
+                    filtered_data['input'].append(data_dict[sample_id]['input'])
+                    filtered_data['output'].append(data_dict[sample_id]['output'])
+
+                data_dict = HFDataset.from_dict(filtered_data)
+            else:
+                raise ValueError(f"Unexpected filtering method: {filtering_method}, choose from ['random', 'cluster']")
             print(f"using {used_data_count} data out of {len(data_dict)}")
             columns = data_dict.column_names
             # changing column names
@@ -183,8 +207,8 @@ class DataCollatorForSupervisedDataset:
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
 
-def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_path, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False) -> Dict:
+def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_path, data_fraction: float=1.0, seed: int=42, efficient_load: bool=False, filtering_method: str='random') -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    train_dataset = SupervisedDataset(tokenizer=tokenizer, data_path=data_path, data_fraction=data_fraction, seed=seed, efficient_load=efficient_load)
+    train_dataset = SupervisedDataset(tokenizer=tokenizer, data_path=data_path, data_fraction=data_fraction, seed=seed, efficient_load=efficient_load, filtering_method=filtering_method)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
