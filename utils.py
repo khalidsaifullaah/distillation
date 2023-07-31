@@ -224,7 +224,7 @@ class LogLevelContext:
 
 # from datasets import load_dataset
 # # load ehartford/dolphin dataset from huggingface
-# dataset = load_dataset("ehartford/dolphin", split="train")
+# dataset = load_dataset("ehartford/dolphin", revision='9571ab52514b89aa9e159c407447fbc144fc9b75', split="train")
 # # select the first 1000 samples
 # # dataset = dataset.select(range(1000))
 # # save the dataset in .jsonl format

@@ -324,21 +324,84 @@
 
 
 # dolphin data baseline training w/ MPT 7B
-python train.py \
---init_checkpoint_path /cmlscratch/khalids/dalle_mini/mpt_7B_sharded \
---model_config_path /cmlscratch/khalids/dalle_mini/mpt_7B_hf \
---checkpoint_path /cmlscratch/khalids/dalle_mini/dolphin_mpt_7B_dfrac_1_baseline \
---wrapped_class_name GPTBlock \
---data_path datasets/dolphin.jsonl \
---hack  --data_fraction 0.01 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_mpt_7B_dfrac_1_baseline
+# python train.py \
+# --init_checkpoint_path /cmlscratch/khalids/dalle_mini/mpt_7B_sharded \
+# --model_config_path /cmlscratch/khalids/dalle_mini/mpt_7B_hf \
+# --checkpoint_path /cmlscratch/khalids/dalle_mini/dolphin_mpt_7B_dfrac_1_baseline \
+# --wrapped_class_name GPTBlock \
+# --data_path datasets/dolphin.jsonl \
+# --hack  --data_fraction 0.01 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_mpt_7B_dfrac_1_baseline
 
-python train.py \
---init_checkpoint_path /cmlscratch/khalids/dalle_mini/mpt_7B_sharded \
---model_config_path /cmlscratch/khalids/dalle_mini/mpt_7B_hf \
---checkpoint_path /cmlscratch/khalids/dalle_mini/dolphin_mpt_7B_dfrac_10_baseline \
---wrapped_class_name GPTBlock \
---data_path datasets/dolphin.jsonl \
---hack  --data_fraction 0.10 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_mpt_7B_dfrac_10_baseline
+# python train.py \
+# --init_checkpoint_path /cmlscratch/khalids/dalle_mini/mpt_7B_sharded \
+# --model_config_path /cmlscratch/khalids/dalle_mini/mpt_7B_hf \
+# --checkpoint_path /cmlscratch/khalids/dalle_mini/dolphin_mpt_7B_dfrac_10_baseline \
+# --wrapped_class_name GPTBlock \
+# --data_path datasets/dolphin.jsonl \
+# --hack  --data_fraction 0.10 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_mpt_7B_dfrac_10_baseline
+
+
+### llama-2 7b
+# CKPT1_SHARDED_PATH=/sensei-fs/users/ksaifullah/llama2_13B_chat_sharded
+# CKPT1_HF_PATH=/sensei-fs/users/ksaifullah/llama2_13B_chat_hf
+# CACHE_PATH=/sensei-fs/users/ksaifullah/cache
+
+# python convert_hf_to_fsdp.py \
+# --load_path meta-llama/Llama-2-13b-chat-hf \
+# --save_path $CKPT1_SHARDED_PATH \
+# --save_path_hf $CKPT1_HF_PATH \
+# --cache_dir $CACHE_PATH \
+# --auth_token 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 \
+# --add_tokens 0
+
+### dolphin data (clustered) training w/ llama-2 7B
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_0.2_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.002 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_0.2_cluster
+
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_0.5_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.005 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_0.5_cluster
+
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_1_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.01 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_1_cluster
+
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_2_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.02 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_2_cluster
+
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_5_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.05 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_5_cluster
+
+# python train.py \
+# --init_checkpoint_path ~/llama2_7B_sharded \
+# --model_config_path ~/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_10_cluster \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method cluster  --data_fraction 0.10 --batch_size 1 --accumulation_steps 8 --wandb --wb_name dolphin_llama2_7B_dfrac_10_cluster
 
 # Machine data (Alpaca) baseline training
 # CKPT_PATH=/cmlscratch/khalids/dalle_mini/mpt_1B_alpaca_baseline
@@ -361,3 +424,14 @@ python train.py \
 # --data_path $DATA_PATH \
 # --hack 
 # --wandb --wb_name mpt_1B_dolly_baseline
+
+
+python train.py \
+--init_checkpoint_path /home/ksaifullah/llama2_7B_sharded \
+--model_config_path /home/ksaifullah/llama2_7B_hf \
+--teacher_model_init_checkpoint_path /home/ksaifullah/llama2_13B_chat_sharded \
+--teacher_model_config_path /home/ksaifullah/llama2_13B_chat_hf \
+--checkpoint_path /home/ksaifullah/llama2_7B_logit_w_miniLLM_reverse_kl_loss_alpha_0.25 \
+--wrapped_class_name LlamaDecoderLayer \
+--data_path datasets/llama_chat_data.jsonl \
+--hack --alpha 0.25 --tmp 1.0 --logit_distillation_mode --loss_type reverse_kl --wandb --wb_name llama2_7B_logit_w_miniLLM_reverse_kl_loss_alpha_0.25
