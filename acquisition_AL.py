@@ -4,7 +4,9 @@ from functools import partial
 import json
 import pickle
 import random
+import time
 from typing import Dict
+import gc
 
 from datasets import Dataset
 import datasets
@@ -135,7 +137,7 @@ if __name__ == "__main__":
     parser.add_argument("--template_type", default="alpaca", type=str)
     parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
     parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
-    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--batch_size", default=8, type=int)
     parser.add_argument("--cluster_data_fraction", default=0.001, type=float)
     parser.add_argument("--al_data_fraction", default=0.001, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -155,20 +157,29 @@ if __name__ == "__main__":
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
     initial_run = True
+    # track loop time
+    start_time = time.time()
     while len(sampled_data) < al_data_count:
         if initial_run:
             # saving sampled data
             sampled_data.to_json(args.save_file_name)
+            print("#"*100)
+            print("Running initial training")
+            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print("#"*100)
             cmd = ["python", "train_AL.py"]
             cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
-            from IPython import embed; embed()
             result = subprocess.run(cmd)
             initial_run = False
 
         else:
+            print("#"*100)
+            print("Sampling new data")
+            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print("#"*100)
             model = transformers.AutoModelForCausalLM.from_pretrained(f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", torch_dtype=torch.bfloat16, trust_remote_code=True).cuda()
             tokenizer = transformers.AutoTokenizer.from_pretrained(
-                    args.model_config_path,
+                    f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl",
                     model_max_length=2048,
                     padding_side="left",
                     use_fast=True,
@@ -201,14 +212,14 @@ if __name__ == "__main__":
                 clusters = pickle.load(f)
             random.seed(args.seed)
             sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
-            filtered_data = {
+            cluster_sampling_data = {
                 'id': [],
                 'instruction': [],
                 'input': [],
                 'output': []
             }
             
-            sampled_data = datasets.load_dataset('json', data_files=args.save_file_name, split='train')
+            # sampled_data = datasets.load_dataset('json', data_files=args.save_file_name, split='train')
             sampled_data_ids = set(sampled_data['id'])
             for c in tqdm(sampled_clusters):
                 idx = random.sample(range(len(clusters[c])), 1)[0]
@@ -217,17 +228,17 @@ if __name__ == "__main__":
                     sample_cluster = random.sample(list(clusters.keys()), 1)[0]
                     idx = random.sample(range(len(clusters[sample_cluster])), 1)[0]
                     sample_id = int(clusters[sample_cluster][idx][0])
-                filtered_data['id'].append(pool_data[sample_id]['id'])
-                filtered_data['instruction'].append(pool_data[sample_id]['instruction'])
-                filtered_data['input'].append(pool_data[sample_id]['input'])
-                filtered_data['output'].append(pool_data[sample_id]['output'])
+                cluster_sampling_data['id'].append(pool_data[sample_id]['id'])
+                cluster_sampling_data['instruction'].append(pool_data[sample_id]['instruction'])
+                cluster_sampling_data['input'].append(pool_data[sample_id]['input'])
+                cluster_sampling_data['output'].append(pool_data[sample_id]['output'])
 
-            pool_data = Dataset.from_dict(filtered_data)
+            cluster_sampling_data = Dataset.from_dict(cluster_sampling_data)
 
             ## preprocess
             eval_preproc = partial(apply_conv_template)
-            pool_data = pool_data.map(eval_preproc)
-            # pool_data = pool_data.map(lambda examples: {"prompt": [examples['instruction'][i]+' '+examples['input'][i] for i in range(len(examples['input']))]}, batched=True)
+            cluster_sampling_data = cluster_sampling_data.map(eval_preproc)
+            # cluster_sampling_data = cluster_sampling_data.map(lambda examples: {"prompt": [examples['instruction'][i]+' '+examples['input'][i] for i in range(len(examples['input']))]}, batched=True)
 
             generate_kwargs = dict(max_new_tokens=256, do_sample=False,
                                 num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
@@ -236,17 +247,29 @@ if __name__ == "__main__":
                             model=model,  
                             tokenizer=tokenizer,
                             kwargs=generate_kwargs)
-            dataset_w_responses = pool_data.map(get_ppl,
+            dataset_w_ppl = cluster_sampling_data.map(get_ppl,
                                                     batched=True,
                                                     batch_size=args.batch_size)
-            dataset_w_responses = dataset_w_responses.sort('ppl', reverse=True)
-            acquisition_samples = dataset_w_responses.select(range(1000))
+            dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
+            model = model.cpu()
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+            # we don't want to add more data than the total data count
+            if len(sampled_data)+1000 <= al_data_count:
+                acquisition_samples = dataset_w_ppl.select(range(1000))
+            else:
+                acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
             acquisition_samples = acquisition_samples.remove_columns('ppl')
-            # merge the sampled data and the acquisition samples
-            sampled_data = concatenate_datasets([sampled_data, acquisition_samples])
+            sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
+            sampled_data.to_json(args.save_file_name)
+            print("#"*100)
+            print("Training on new data")
+            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print("#"*100)
+            cmd = ["python", "train_AL.py"]
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            result = subprocess.run(cmd)
 
-
-
-
-            from IPython import embed; embed()
-            # dataset_w_responses.to_json(args.save_file_name)
+    end_time = time.time()
+    print(f"Total time taken: {(end_time-start_time)/60} minutes")
