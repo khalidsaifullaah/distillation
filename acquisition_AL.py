@@ -1,4 +1,5 @@
 """This script generates the evaluation responses that can e used by eval_scoring.py"""
+import os
 import argparse
 from functools import partial
 import json
@@ -144,11 +145,6 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
     args = parser.parse_args()
 
-    # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
-    # if isinstance(model_config, LlamaConfig):
-    #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
-
-    # model = load_fsdp_ckpt_with_accelerate(args.model, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
     sampled_data = pool_data.shuffle(seed=args.seed).select(range(1000))
@@ -156,8 +152,9 @@ if __name__ == "__main__":
     used_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
+    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
     initial_run = True
-    # track loop time
+    steps = 0
     start_time = time.time()
     while len(sampled_data) < al_data_count:
         if initial_run:
@@ -168,7 +165,7 @@ if __name__ == "__main__":
             print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_{steps}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -177,9 +174,16 @@ if __name__ == "__main__":
             print("Sampling new data")
             print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
-            model = transformers.AutoModelForCausalLM.from_pretrained(f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", torch_dtype=torch.bfloat16, trust_remote_code=True).cuda()
+            # set env variable CUDA_VISIBLE_DEVICES to 0
+            # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+            model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
+            # if isinstance(model_config, LlamaConfig):
+            #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
+
+            model = load_fsdp_ckpt_with_accelerate(f"{model_path}_{steps}_sharded/{os.listdir(model_path)[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
+            # model = transformers.AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).cuda()
             tokenizer = transformers.AutoTokenizer.from_pretrained(
-                    f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl",
+                    args.model_config_path,
                     model_max_length=2048,
                     padding_side="left",
                     use_fast=True,
@@ -255,6 +259,7 @@ if __name__ == "__main__":
             del model
             gc.collect()
             torch.cuda.empty_cache()
+
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
                 acquisition_samples = dataset_w_ppl.select(range(1000))
@@ -267,9 +272,13 @@ if __name__ == "__main__":
             print("Training on new data")
             print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
+            steps += 1
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_{steps}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
             result = subprocess.run(cmd)
 
     end_time = time.time()
     print(f"Total time taken: {(end_time-start_time)/60} minutes")
+
+    cmd = ["python", "convert_fsdp_to_hf.py"]
+    cmd.extend(["--load_path", f"{model_path}_{steps}_sharded/{os.listdir(model_path)[0]}/model"], "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path)
