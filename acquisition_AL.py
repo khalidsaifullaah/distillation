@@ -117,14 +117,14 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
         # model_output = model.generate(**encoding, **kwargs)
         # logits = torch.nan_to_num(torch.stack(model_output.scores).transpose(0,1))
         # labels = model_output.sequences[:, encoding['input_ids'].shape[-1]:]
-        # loss = get_clm_loss(labels, logits.float())
-        ppl = torch.exp(loss).tolist()
+        # ppl = loss = get_clm_loss(labels, logits.float()) # using log perplexity
+        log_ppl = loss.tolist()
         # input_len = encoding['input_ids'].shape[-1]
         # output_sequences = model_output.sequences[:, input_len:].cpu()
         # decoded_output = tokenizer.batch_decode(output_sequences, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
     del example['prompt']
-    example.update({"ppl": ppl})
+    example.update({"ppl": log_ppl})
     # example.update({"decoded_output": decoded_output})
 
     return example
@@ -149,10 +149,10 @@ if __name__ == "__main__":
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
     sampled_data = pool_data.shuffle(seed=args.seed).select(range(1000))
 
-    used_data_count = int(len(pool_data)*args.cluster_data_fraction)
+    pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
-    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_generate_ppl"
     initial_run = True
     steps = 0
     start_time = time.time()
@@ -180,7 +180,7 @@ if __name__ == "__main__":
             # if isinstance(model_config, LlamaConfig):
             #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
 
-            model = load_fsdp_ckpt_with_accelerate(f"{model_path}_{steps}_sharded/{os.listdir(model_path)[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
+            model = load_fsdp_ckpt_with_accelerate(f"{model_path}_{steps}_sharded/{os.listdir(f'{model_path}_{steps}_sharded')[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
             # model = transformers.AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).cuda()
             tokenizer = transformers.AutoTokenizer.from_pretrained(
                     args.model_config_path,
@@ -215,7 +215,7 @@ if __name__ == "__main__":
             with open('clusters.pkl', 'rb') as f:
                 clusters = pickle.load(f)
             random.seed(args.seed)
-            sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
+            sampled_clusters = random.choices(list(clusters.keys()), k=pool_data_count)
             cluster_sampling_data = {
                 'id': [],
                 'instruction': [],
@@ -272,6 +272,7 @@ if __name__ == "__main__":
             print("Training on new data")
             print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
+            os.system(f"rm -rf {model_path}_{steps}_sharded")
             steps += 1
             cmd = ["python", "train_AL.py"]
             cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_{steps}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
@@ -280,5 +281,9 @@ if __name__ == "__main__":
     end_time = time.time()
     print(f"Total time taken: {(end_time-start_time)/60} minutes")
 
+    print("#"*100)
+    print("Converting to HF")
+    print("#"*100)
     cmd = ["python", "convert_fsdp_to_hf.py"]
-    cmd.extend(["--load_path", f"{model_path}_{steps}_sharded/{os.listdir(model_path)[0]}/model"], "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path)
+    cmd.extend(["--load_path", f"{model_path}_{steps}_sharded/{os.listdir(f'{model_path}_{steps}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path])
+    result = subprocess.run(cmd)

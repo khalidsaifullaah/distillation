@@ -6,6 +6,7 @@ import random
 
 import torch
 import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
@@ -307,17 +308,23 @@ def fsdp_main(rank, world_size, args):
         scheduler.step()
         opt.zero_grad()
 
-        # save the model, optimizer, scheduler
-        # if (step_count+1) % save_steps == 0 or (step_count+1) == args.max_steps:
-        #     if rank == 0:
-        #         print("saving checkpoint", step_count+1)
-        #     save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=args.dont_save_opt)
     if rank == 0:
         print("saving checkpoint", step_count+1)
-    # save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=args.dont_save_opt)
-        # saving the huggingface model
-    model.save_pretrained(args.checkpoint_path)
-    tokenizer.save_pretrained(args.checkpoint_path)
+    save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=True)
+    # save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    # with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
+    #     cpu_state = model.state_dict()
+    #     print(cpu_state)
+    
+    # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path, trust_remote_code=True)
+    # tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_config_path, trust_remote_code=True)
+    # hf_model = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).bfloat16()
+    # if args.added_tokens > 0:
+    #     hf_model.resize_token_embeddings(hf_model.config.vocab_size + args.added_tokens)
+    # hf_model.load_state_dict(cpu_state)
+    # hf_model.save_pretrained(args.save_path)
+    # model.save_pretrained(args.checkpoint_path, state_dice=cpu_state)
+    # tokenizer.save_pretrained(args.checkpoint_path)
 
     cleanup()
 
