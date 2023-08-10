@@ -15,6 +15,7 @@ import transformers
 from transformers import StoppingCriteria, StoppingCriteriaList
 from transformers.models.llama.configuration_llama import LlamaConfig
 import torch
+import torch.multiprocessing as mp
 from tqdm import tqdm
 import copy
 import train_AL
@@ -105,10 +106,7 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
                           truncation=True,
                       )
     encoding.pop('token_type_ids', None)
-    encoding = {k: v.cuda() for k,v in encoding.items()}
-    # labels = copy.deepcopy(encoding['input_ids'])
-    # labels_lens = torch.sum(labels != tokenizer.pad_token_id, dim=-1).tolist()
-    # labels[labels == tokenizer.pad_token_id] = IGNORE_INDEX
+    encoding = {k: v.to(model.device) for k,v in encoding.items()}
     with torch.no_grad():
         model_output = model(**encoding)
         if torch.isnan(model_output.logits).any():
@@ -124,27 +122,37 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
         # decoded_output = tokenizer.batch_decode(output_sequences, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
     del example['prompt']
-    example.update({"ppl": log_ppl})
+    # example.update({"ppl": log_ppl})
     # example.update({"decoded_output": decoded_output})
+    # return example
+    return log_ppl
 
-    return example
+def inference_worker(rank, model, tokenizer, data_partition, result_list):
+    gpu = rank
+    device = torch.device(f'cuda:{gpu}')
+    model = model.to(device)
+    model.eval()
+    generate_kwargs = dict(max_new_tokens=256, do_sample=False,
+        num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
+        stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
+    get_ppl = partial(compute_perplexity_batched, 
+                    model=model,  
+                    tokenizer=tokenizer,
+                    kwargs=generate_kwargs)
+
+    ppl_list = []
+    for batch in tqdm(data_partition.iter(batch_size=args.batch_size)):
+        batch_ppl = get_ppl(batch)
+        ppl_list.extend(batch_ppl)
+    dataset_w_ppl = data_partition.add_column('ppl', ppl_list)
+    result_list.append(dataset_w_ppl)
+    # model = model.cpu()
+
+    return
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/home/ksaifullah/llama2_7B_sharded", type=str)
-    parser.add_argument("--model_name", default=None, type=str)
-    parser.add_argument("--model_config_path", default="/home/ksaifullah/llama2_7B_hf", type=str)
-    parser.add_argument("--template_type", default="alpaca", type=str)
-    parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
-    parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
-    parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--cluster_data_fraction", default=0.001, type=float)
-    parser.add_argument("--al_data_fraction", default=0.001, type=float)
-    parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
-    args = parser.parse_args()
-
+def main(args):
+    # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
     sampled_data = pool_data.shuffle(seed=args.seed).select(range(1000))
@@ -152,7 +160,7 @@ if __name__ == "__main__":
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
-    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_generate_ppl"
+    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     initial_run = True
     steps = 0
     start_time = time.time()
@@ -161,29 +169,31 @@ if __name__ == "__main__":
             # saving sampled data
             sampled_data.to_json(args.save_file_name)
             print("#"*100)
-            print("Running initial training")
+            print("Running initial Steps: {steps}, training")
             print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_{steps}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
             result = subprocess.run(cmd)
             initial_run = False
 
         else:
             print("#"*100)
             print("Sampling new data")
-            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
-            # set env variable CUDA_VISIBLE_DEVICES to 0
-            # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-            model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
+            # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
             # if isinstance(model_config, LlamaConfig):
             #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
 
-            model = load_fsdp_ckpt_with_accelerate(f"{model_path}_{steps}_sharded/{os.listdir(f'{model_path}_{steps}_sharded')[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
-            # model = transformers.AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).cuda()
+            # model = load_fsdp_ckpt_with_accelerate(f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
+            cmd = ["python", "convert_fsdp_to_hf.py"]
+            cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
+            result = subprocess.run(cmd)
+
+            model = transformers.AutoModelForCausalLM.from_pretrained(f"{model_path}_hf", torch_dtype=torch.bfloat16, trust_remote_code=True)
             tokenizer = transformers.AutoTokenizer.from_pretrained(
-                    args.model_config_path,
+                    f"{model_path}_hf",
                     model_max_length=2048,
                     padding_side="left",
                     use_fast=True,
@@ -204,8 +214,6 @@ if __name__ == "__main__":
                 model=model,
             )
 
-            ## set the models to eval mode
-            model = model.eval()
             #remove the sampled data from the pool data with .filter()
             # pool_data.set_format('pandas')
             # df = pool_data[:]
@@ -238,28 +246,32 @@ if __name__ == "__main__":
                 cluster_sampling_data['output'].append(pool_data[sample_id]['output'])
 
             cluster_sampling_data = Dataset.from_dict(cluster_sampling_data)
-
             ## preprocess
             eval_preproc = partial(apply_conv_template)
             cluster_sampling_data = cluster_sampling_data.map(eval_preproc)
-            # cluster_sampling_data = cluster_sampling_data.map(lambda examples: {"prompt": [examples['instruction'][i]+' '+examples['input'][i] for i in range(len(examples['input']))]}, batched=True)
 
-            generate_kwargs = dict(max_new_tokens=256, do_sample=False,
-                                num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
-                                stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
-            get_ppl = partial(compute_perplexity_batched, 
-                            model=model,  
-                            tokenizer=tokenizer,
-                            kwargs=generate_kwargs)
-            dataset_w_ppl = cluster_sampling_data.map(get_ppl,
-                                                    batched=True,
-                                                    batch_size=args.batch_size)
+            num_processes = num_gpus = torch.cuda.device_count()
+            try:
+                mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
+            except RuntimeError:
+                pass
+            result_list = mp.Manager().list()
+            processes = []
+            for rank in range(num_processes):
+                p = mp.Process(target=inference_worker, args=(rank, model, tokenizer, cluster_sampling_data.shard(num_shards=num_gpus, index=rank), result_list))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+                p.close()
+            print("All processes joined and closed")
+            dataset_w_ppl = datasets.concatenate_datasets(result_list)
             dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
             model = model.cpu()
             del model
             gc.collect()
             torch.cuda.empty_cache()
-
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
                 acquisition_samples = dataset_w_ppl.select(range(1000))
@@ -268,14 +280,15 @@ if __name__ == "__main__":
             acquisition_samples = acquisition_samples.remove_columns('ppl')
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(args.save_file_name)
+
             print("#"*100)
             print("Training on new data")
-            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
-            os.system(f"rm -rf {model_path}_{steps}_sharded")
+            os.system(f"rm -rf {model_path}_sharded")
             steps += 1
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_{steps}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -285,5 +298,23 @@ if __name__ == "__main__":
     print("Converting to HF")
     print("#"*100)
     cmd = ["python", "convert_fsdp_to_hf.py"]
-    cmd.extend(["--load_path", f"{model_path}_{steps}_sharded/{os.listdir(f'{model_path}_{steps}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path])
+    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
     result = subprocess.run(cmd)
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="/home/ksaifullah/llama2_7B_sharded", type=str)
+    parser.add_argument("--model_name", default=None, type=str)
+    parser.add_argument("--model_config_path", default="/home/ksaifullah/llama2_7B_hf", type=str)
+    parser.add_argument("--template_type", default="alpaca", type=str)
+    parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
+    parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
+    parser.add_argument("--batch_size", default=8, type=int)
+    parser.add_argument("--cluster_data_fraction", default=0.001, type=float)
+    parser.add_argument("--al_data_fraction", default=0.001, type=float)
+    parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
+    args = parser.parse_args()
+    main(args)
