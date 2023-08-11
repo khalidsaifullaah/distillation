@@ -1,3 +1,5 @@
+# source: https://medium.com/ntropy-network/clustering-millions-of-sentences-to-optimize-the-ml-workflow-f8d067f74dce
+
 from collections import defaultdict
 import numpy as np
 from joblib import Parallel, delayed
