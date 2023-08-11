@@ -65,7 +65,7 @@ def get_fsdp_wrapped_empty_model(model_config, wrapped_cls, hack=False):
     model = FSDP(model, auto_wrap_policy=my_auto_wrap_policy, device_id=torch.cuda.current_device(), mixed_precision=bf16)
     return model
 
-def load_fsdp_ckpt_with_accelerate(fsdp_path, model_config, hf_dummy_path, wrapped_class):
+def load_fsdp_ckpt_with_accelerate(fsdp_path, model_config, hf_dummy_path, wrapped_class, rank=0):
     # the dummy path a checkpoint path with huggingface format the accelerate.load_checkpoint_and_dispatch uses
     # in order to leverage the function, we have to provide this path, so the weights are moved to the right device without blowing up
     # memories. The weights will later be overwritten by the checkpoint from fsdp_path.
@@ -74,7 +74,8 @@ def load_fsdp_ckpt_with_accelerate(fsdp_path, model_config, hf_dummy_path, wrapp
         model_empty = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
         model_empty = model_empty.bfloat16()
 
-    model = load_checkpoint_and_dispatch(model_empty, hf_dummy_path, device_map="auto", no_split_module_classes=[wrapped_class])
+    device_map = {"model": rank, "lm_head": rank}
+    model = load_checkpoint_and_dispatch(model_empty, hf_dummy_path, device_map=device_map, no_split_module_classes=[wrapped_class])
     # this is a hack
     # the model weights in hf_dummy_path may have a different vocab size than the desired fsdp model we are trying to 
     # load from fsdp_path, so we explicitly resize the token embeddings after the model has been loaded.
@@ -82,6 +83,7 @@ def load_fsdp_ckpt_with_accelerate(fsdp_path, model_config, hf_dummy_path, wrapp
     if model.config.vocab_size != current_vocab_size_based_on_weight:
         # this will retie the weights if it is supposed to be tied, but also causes the weight device to be weird
         model.resize_token_embeddings(model.config.vocab_size)
+        print("resized token embeddings to vocab size: ", model.config.vocab_size)
     print("device map used by accelerate:\n", json.dumps(model.hf_device_map, indent=4))
     model = load_state_dict_fsdp(model, fsdp_path, offload_to_cpu=False, no_dist=True)
     return model
@@ -221,6 +223,14 @@ class LogLevelContext:
     def __exit__(self, exc_type, exc_value, traceback):
         for logger, original_level in self.original_levels.items():
             logger.setLevel(original_level)
+
+def add_padding_token(tokenizer):
+    print("attempt to add padding token if no padding token exists")
+    print("Special tokens before adding padding token: ", tokenizer.special_tokens_map)
+    if not tokenizer.pad_token:
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    print("Special tokens after adding padding token: ", tokenizer.special_tokens_map)
+    return tokenizer
 
 # from datasets import load_dataset
 # # load ehartford/dolphin dataset from huggingface

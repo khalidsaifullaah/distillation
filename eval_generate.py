@@ -159,7 +159,7 @@ if __name__ == "__main__":
     elif "alpaca_eval" in args.file_path:
         raw_data = datasets.load_dataset("tatsu-lab/alpaca_eval", "alpaca_eval")["eval"]
         # set generator field to model name
-        raw_data = raw_data.map(lambda x: {"generator": args.model_name if args.model_name else args.model})
+        raw_data = raw_data.map(lambda x: {"generator": args.model_name if args.model_name else args.model_config_path})
 
     # reduce number of examples for debugging
     if args.debug:

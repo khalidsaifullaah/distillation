@@ -22,7 +22,7 @@ import train_AL
 import subprocess
 
 from io_utils import load_jsonlines
-from utils import load_fsdp_ckpt_with_accelerate
+from utils import load_fsdp_ckpt_with_accelerate, add_padding_token
 from conversation import get_conv_template
 
 IGNORE_INDEX = -100
@@ -106,7 +106,7 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
                           truncation=True,
                       )
     encoding.pop('token_type_ids', None)
-    encoding = {k: v.to(model.device) for k,v in encoding.items()}
+    encoding = {k: v.to(f"cuda:{kwargs['device']}") for k,v in encoding.items()}
     with torch.no_grad():
         model_output = model(**encoding)
         if torch.isnan(model_output.logits).any():
@@ -127,12 +127,32 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
     # return example
     return log_ppl
 
-def inference_worker(rank, model, tokenizer, data_partition, result_list):
+def inference_worker(rank, sharded_model_path, data_partition, result_list):
     gpu = rank
-    device = torch.device(f'cuda:{gpu}')
-    model = model.to(device)
+    model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
+    model = load_fsdp_ckpt_with_accelerate(sharded_model_path, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer", rank=gpu)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+            args.model_config_path,
+            model_max_length=2048,
+            padding_side="left",
+            use_fast=True,
+        )
+    special_tokens_dict = dict()
+    if tokenizer.pad_token is None:
+        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+    smart_tokenizer_and_embedding_resize(
+                special_tokens_dict=special_tokens_dict,
+                tokenizer=tokenizer,
+                model=model,
+            )
     model.eval()
-    generate_kwargs = dict(max_new_tokens=256, do_sample=False,
+    generate_kwargs = dict(device=gpu, max_new_tokens=256, do_sample=False,
         num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
         stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
     get_ppl = partial(compute_perplexity_batched, 
@@ -169,11 +189,11 @@ def main(args):
             # saving sampled data
             sampled_data.to_json(args.save_file_name)
             print("#"*100)
-            print("Running initial Steps: {steps}, training")
-            print(f"sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
+            print("Running seed training")
+            print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"])
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -185,34 +205,19 @@ def main(args):
             # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
             # if isinstance(model_config, LlamaConfig):
             #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
+            # model = load_fsdp_ckpt_with_accelerate(args.model, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer", rank=0)
+            # # cmd = ["python", "convert_fsdp_to_hf.py"]
+            # # cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
+            # # result = subprocess.run(cmd)
 
-            # model = load_fsdp_ckpt_with_accelerate(f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
-            cmd = ["python", "convert_fsdp_to_hf.py"]
-            cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
-            result = subprocess.run(cmd)
-
-            model = transformers.AutoModelForCausalLM.from_pretrained(f"{model_path}_hf", torch_dtype=torch.bfloat16, trust_remote_code=True)
-            tokenizer = transformers.AutoTokenizer.from_pretrained(
-                    f"{model_path}_hf",
-                    model_max_length=2048,
-                    padding_side="left",
-                    use_fast=True,
-                )
-            special_tokens_dict = dict()
-            if tokenizer.pad_token is None:
-                special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-            if tokenizer.eos_token is None:
-                special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
-            if tokenizer.bos_token is None:
-                special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
-            if tokenizer.unk_token is None:
-                special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
-
-            smart_tokenizer_and_embedding_resize(
-                special_tokens_dict=special_tokens_dict,
-                tokenizer=tokenizer,
-                model=model,
-            )
+            # # model = transformers.AutoModelForCausalLM.from_pretrained(f"{model_path}_hf", torch_dtype=torch.bfloat16, trust_remote_code=True)
+            # tokenizer = transformers.AutoTokenizer.from_pretrained(
+            #         f"{model_path}_hf",
+            #         model_max_length=2048,
+            #         padding_side="left",
+            #         use_fast=True,
+            #     )
+            # add_padding_token(tokenizer)
 
             #remove the sampled data from the pool data with .filter()
             # pool_data.set_format('pandas')
@@ -255,10 +260,11 @@ def main(args):
                 mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
             except RuntimeError:
                 pass
+            sharded_model_path = f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model"
             result_list = mp.Manager().list()
             processes = []
             for rank in range(num_processes):
-                p = mp.Process(target=inference_worker, args=(rank, model, tokenizer, cluster_sampling_data.shard(num_shards=num_gpus, index=rank), result_list))
+                p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, cluster_sampling_data.shard(num_shards=num_gpus, index=rank), result_list))
                 p.start()
                 processes.append(p)
 
@@ -266,12 +272,12 @@ def main(args):
                 p.join()
                 p.close()
             print("All processes joined and closed")
-            dataset_w_ppl = datasets.concatenate_datasets(result_list)
-            dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
-            model = model.cpu()
-            del model
+            # model = model.cpu()
+            # del model
             gc.collect()
             torch.cuda.empty_cache()
+            dataset_w_ppl = datasets.concatenate_datasets(result_list)
+            dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
                 acquisition_samples = dataset_w_ppl.select(range(1000))
@@ -281,14 +287,14 @@ def main(args):
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(args.save_file_name)
 
+            steps += 1
             print("#"*100)
             print("Training on new data")
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             os.system(f"rm -rf {model_path}_sharded")
-            steps += 1
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt"]) # , "--wandb", "--wb_name", f"al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_ppl"
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"])
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -311,7 +317,7 @@ if __name__ == "__main__":
     parser.add_argument("--template_type", default="alpaca", type=str)
     parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
     parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
-    parser.add_argument("--batch_size", default=8, type=int)
+    parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--cluster_data_fraction", default=0.001, type=float)
     parser.add_argument("--al_data_fraction", default=0.001, type=float)
     parser.add_argument("--seed", default=42, type=int)
