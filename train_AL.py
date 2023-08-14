@@ -179,8 +179,8 @@ def fsdp_main(rank, world_size, args):
     data_collator = data_module['data_collator']
     dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
     # next(iter(dataloader_full)) # this is to make sure that the dataloader is initialized properly
-    args.max_steps = (len(dataloader_full) * args.num_epochs)//(args.batch_size*world_size*args.accumulation_steps)
-    args.save_steps = ((len(dataloader_full) * args.num_epochs)/(args.batch_size*world_size*args.accumulation_steps))//10
+    args.max_steps = (len(train_dataset) * args.num_epochs)//(args.batch_size*world_size*args.accumulation_steps)
+    args.save_steps = ((len(train_dataset) * args.num_epochs)/(args.batch_size*world_size*args.accumulation_steps))//10
     print("max_steps", args.max_steps, "save_steps", args.save_steps)
     # updating the dataloader to the right state
     step_count = start_step_count

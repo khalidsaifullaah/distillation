@@ -39,7 +39,12 @@ PROMPT_DICT = {
     "prompt_no_input": (
         "Below is an instruction that describes a task. "
         "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response:"
+        "### Instruction:\n{input}\n\n### Response:"
+    ),
+    "confidence_prompt": (
+        "Below is an instruction that describes a task. "
+        "Write a response that appropriately completes the request.\n\n"
+        "### Instruction:\nHere's a user query: '{input}'\nNow, looking at the user query respond whether you know the answer or not (Please only respond with 'yes' or 'no')\n\n### Response:"
     ),
 }
 
@@ -75,9 +80,9 @@ def smart_tokenizer_and_embedding_resize(
 
 def apply_conv_template(example):
     # preprocess instructions into prompted inputs
-    prompt_input, prompt_no_input = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"]
-    source  = prompt_input.format_map(example) if example.get("input", "") != "" else prompt_no_input.format_map(example)
-
+    prompt_input, prompt_no_input, confidence_prompt = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"], PROMPT_DICT["confidence_prompt"]
+    source  = prompt_input.format_map(example) if example.get("instruction", "") != "" else prompt_no_input.format_map(example)
+    # source = confidence_prompt.format_map(example)
     example.update({
         "prompt": source
     })
@@ -97,7 +102,7 @@ def get_clm_loss(labels, lm_logits):
     loss_per_example = loss.view(shift_logits.size(0), shift_logits.size(1)).mean(axis=1)
     return loss_per_example
 
-def compute_perplexity_batched(example, model, tokenizer, kwargs):
+def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None):
     prompt = example['prompt']
     encoding = tokenizer(prompt, 
                           return_tensors="pt",
@@ -106,14 +111,17 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
                           truncation=True,
                       )
     encoding.pop('token_type_ids', None)
-    encoding = {k: v.to(f"cuda:{kwargs['device']}") for k,v in encoding.items()}
+    encoding = {k: v.to(f"cuda:{device}") for k,v in encoding.items()}
     with torch.no_grad():
         model_output = model(**encoding)
         if torch.isnan(model_output.logits).any():
             print("NAN")
         loss = get_clm_loss(encoding['input_ids'], model_output.logits.float())
+        # kwargs['max_new_tokens'] = 3
         # model_output = model.generate(**encoding, **kwargs)
         # logits = torch.nan_to_num(torch.stack(model_output.scores).transpose(0,1))
+        # token_probs = torch.nn.functional.softmax(logits, dim=-1)
+        # confidence = token_probs[:, :, torch.tensor([1939,694])].view(len(prompt), -1).mean(dim=-1).tolist() # 1939: No, 694: no
         # labels = model_output.sequences[:, encoding['input_ids'].shape[-1]:]
         # ppl = loss = get_clm_loss(labels, logits.float()) # using log perplexity
         log_ppl = loss.tolist()
@@ -126,6 +134,7 @@ def compute_perplexity_batched(example, model, tokenizer, kwargs):
     # example.update({"decoded_output": decoded_output})
     # return example
     return log_ppl
+    # return confidence
 
 def inference_worker(rank, sharded_model_path, data_partition, result_list):
     gpu = rank
@@ -152,12 +161,13 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
                 model=model,
             )
     model.eval()
-    generate_kwargs = dict(device=gpu, max_new_tokens=256, do_sample=False,
+    generate_kwargs = dict(max_new_tokens=256, do_sample=False, temperature=0.6,
         num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
         stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
     get_ppl = partial(compute_perplexity_batched, 
                     model=model,  
                     tokenizer=tokenizer,
+                    device=gpu,
                     kwargs=generate_kwargs)
 
     ppl_list = []
@@ -180,7 +190,8 @@ def main(args):
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
-    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
+    # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
+    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
     steps = 0
     start_time = time.time()
@@ -193,7 +204,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"])
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation", "--num_epochs", "2"])
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -254,7 +265,6 @@ def main(args):
             ## preprocess
             eval_preproc = partial(apply_conv_template)
             cluster_sampling_data = cluster_sampling_data.map(eval_preproc)
-
             num_processes = num_gpus = torch.cuda.device_count()
             try:
                 mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
@@ -278,6 +288,9 @@ def main(args):
             torch.cuda.empty_cache()
             dataset_w_ppl = datasets.concatenate_datasets(result_list)
             dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
+            # count the frequency of ppl in the dataset
+            # from collections import Counter
+            # ppl_freq = Counter(dataset_w_ppl['ppl'])
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
                 acquisition_samples = dataset_w_ppl.select(range(1000))
@@ -285,7 +298,7 @@ def main(args):
                 acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
             acquisition_samples = acquisition_samples.remove_columns('ppl')
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
-            sampled_data.to_json(args.save_file_name)
+            sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
 
             steps += 1
             print("#"*100)
@@ -294,17 +307,19 @@ def main(args):
             print("#"*100)
             os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"])
+            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation", "--num_epochs", "2"])
             result = subprocess.run(cmd)
 
     end_time = time.time()
     print(f"Total time taken: {(end_time-start_time)/60} minutes")
+    with open('al_experiments_runtime.txt', 'a+') as f:
+        f.write(f"{model_path}: {(end_time-start_time)/60} minutes\n")
 
     print("#"*100)
     print("Converting to HF")
     print("#"*100)
     cmd = ["python", "convert_fsdp_to_hf.py"]
-    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
+    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path])
     result = subprocess.run(cmd)
 
 

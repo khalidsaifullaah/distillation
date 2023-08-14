@@ -37,7 +37,7 @@ PROMPT_DICT = {
     "prompt_no_input": (
         "Below is an instruction that describes a task. "
         "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Response:"
+        "### Instruction:\n{input}\n\n### Response:"
     ),
 }
 
@@ -103,7 +103,7 @@ class SupervisedDataset(Dataset):
                 data_dict = data_dict.select(range(used_data_count))
             elif filtering_method == 'cluster':
                 print("filtering data based on clusters")
-                with open('clusters.pkl', 'rb') as f:
+                with open('/sensei-fs/users/ksaifullah/clusters.pkl', 'rb') as f:
                     clusters = pickle.load(f)
                 random.seed(seed)
                 sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
@@ -137,7 +137,7 @@ class SupervisedDataset(Dataset):
                 output = []
                 for row in zip(examples["instruction"], examples["input"], examples["output"]):
                     examples = {"instruction": row[0], "input": row[1], "output": row[2]}
-                    if examples.get("input", "") != "":
+                    if examples.get("instruction", "") != "":
                         output += [prompt_input.format_map(examples)]
                     else:
                         output += [prompt_no_input.format_map(examples)]
