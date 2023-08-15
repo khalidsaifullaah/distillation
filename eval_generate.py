@@ -21,6 +21,13 @@ DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
+PROMPT_DICT = {
+"alpaca": {"prompt_input": (
+        "Below is an instruction that describes a task. "
+        "Write a response that appropriately completes the request.\n\n"
+        "### Instruction:\n{instruction}\n\n### Response:"
+    ),}
+}
 
 class StopOnTokens(StoppingCriteria):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
@@ -32,13 +39,10 @@ class StopOnTokens(StoppingCriteria):
 
 def apply_conv_template(example, template_type):
     # preprocess instructions into prompted inputs
-    conv = get_conv_template(template_type)
-    conv.append_message(conv.roles[0], example['instruction'])
-    conv.append_message(conv.roles[1], "")
-    prompt = conv.get_prompt()
-
+    prompt_input= PROMPT_DICT[template_type]["prompt_input"]
+    source  = prompt_input.format_map(example)
     example.update({
-        "prompt": prompt
+        "prompt": source
     })
 
     return example
@@ -82,8 +86,9 @@ def generate_responses_batched(example, model, tokenizer, kwargs):
 
     del example['prompt']
     example.update({"output": decoded_output})
-    kwargs.pop("stopping_criteria", None)
-    example.update({"metadata": [kwargs] * len(decoded_output)})
+    # metadata = {k: v for k, v in kwargs.items() if k != "stopping_criteria"}
+    metadata = kwargs
+    example.update({"metadata": [metadata] * len(decoded_output)})
 
     return example
 
@@ -92,9 +97,12 @@ def inference_worker(rank, model, tokenizer, data_partition, result_list):
     device = torch.device(f'cuda:{gpu}')
     model = model.to(device)
     model.eval()
-    generate_kwargs = dict(max_new_tokens=512, do_sample=True, temperature=0.6, top_p=0.9,
-        num_return_sequences=1, stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
-    get_ppl = partial(generate_responses_batched, 
+    generate_kwargs = dict(max_new_tokens=2048, 
+                           do_sample=True, temperature=0.7, top_p=1.0,
+                           num_return_sequences=1, 
+                        #    stopping_criteria=StoppingCriteriaList([StopOnTokens()])
+        )
+    get_ppl = partial(generate_responses_batched,
                     model=model,  
                     tokenizer=tokenizer,
                     kwargs=generate_kwargs)
@@ -168,7 +176,6 @@ if __name__ == "__main__":
     ## preprocess
     eval_preproc = partial(apply_conv_template, template_type=args.template_type)
     raw_data = raw_data.map(eval_preproc)
-
     num_processes = num_gpus = torch.cuda.device_count()
     try:
         mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
