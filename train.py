@@ -307,11 +307,13 @@ def fsdp_main(rank, world_size, args):
         opt.zero_grad()
 
         # save the model, optimizer, scheduler
-        if (step_count+1) % save_steps == 0 or (step_count+1) == args.max_steps:
-            if rank == 0:
-                print("saving checkpoint", step_count+1)
-            save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=args.dont_save_opt)
-        
+        # if (step_count+1) % save_steps == 0 or (step_count+1) == args.max_steps:
+        #     if rank == 0:
+        #         print("saving checkpoint", step_count+1)
+        #     save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=args.dont_save_opt)
+    if rank == 0:
+        print("saving checkpoint", step_count+1)
+    save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=True)
 
     cleanup()
 
@@ -329,7 +331,7 @@ if __name__ == '__main__':
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
     parser.add_argument("--spike_factor", type=float, default=0.0, help="the weight of the distillation loss")
     parser.add_argument("--no_dist", action='store_true')
-    parser.add_argument("--num_epochs", type=int, default=3)
+    parser.add_argument("--num_epochs", type=int, default=2)
     parser.add_argument("--use_hidden_states", action='store_true')
     parser.add_argument("--use_attention_scores", action='store_true')
     parser.add_argument("--filtering_method", type=str, choices=["random", "cluster"], default="random")
