@@ -190,15 +190,18 @@ def main(args):
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
-    # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
-    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
+    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
+    # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
+    resume = args.resume
+    if resume:
+        initial_run = False
     steps = 0
     start_time = time.time()
     while len(sampled_data) < al_data_count:
         if initial_run:
             # saving sampled data
-            sampled_data.to_json(args.save_file_name)
+            sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
             print("#"*100)
             print("Running seed training")
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
@@ -209,6 +212,14 @@ def main(args):
             initial_run = False
 
         else:
+            if resume:
+                sharded_model_path = f"{args.resume_checkpoint_path}/{os.listdir(args.resume_checkpoint_path)[0]}/model"
+                prev_data_fraction = args.resume_checkpoint_path.split('dfrac_')[-1].split('_')[0]
+                prev_sampled_data_path = f"{args.save_file_name.split('.')[0]}_{prev_data_fraction}.json"
+                sampled_data = datasets.load_dataset('json', data_files=prev_sampled_data_path, split='train')
+                resume = False
+            else:
+                sharded_model_path = f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model"
             print("#"*100)
             print("Sampling new data")
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
@@ -246,7 +257,7 @@ def main(args):
                 'input': [],
                 'output': []
             }
-            
+            from IPython import embed; embed()
             # sampled_data = datasets.load_dataset('json', data_files=args.save_file_name, split='train')
             sampled_data_ids = set(sampled_data['id'])
             for c in tqdm(sampled_clusters):
@@ -270,7 +281,6 @@ def main(args):
                 mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
             except RuntimeError:
                 pass
-            sharded_model_path = f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model"
             result_list = mp.Manager().list()
             processes = []
             for rank in range(num_processes):
@@ -337,5 +347,7 @@ if __name__ == "__main__":
     parser.add_argument("--al_data_fraction", default=0.001, type=float)
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
+    parser.add_argument("--resume", action='store_true', help="This will resume the training from a AL checkpoint.")
+    parser.add_argument("--resume_checkpoint_path", default=None, type=str, help="AL checkpoint path to resume from.")
     args = parser.parse_args()
     main(args)
