@@ -100,7 +100,7 @@ class SupervisedDataset(Dataset):
             data_dict = load_dataset('json', data_files=data_path, split='train')
             used_data_count = int(len(data_dict)*data_fraction)
             if filtering_method == 'random':
-                data_dict = data_dict.select(range(used_data_count))
+                data_dict = data_dict.shuffle(seed=seed).select(range(used_data_count))
             elif filtering_method == 'cluster':
                 print("filtering data based on clusters")
                 with open('/sensei-fs/users/ksaifullah/clusters.pkl', 'rb') as f:
