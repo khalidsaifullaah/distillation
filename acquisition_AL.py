@@ -190,7 +190,7 @@ def main(args):
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
 
-    model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
+    model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
     resume = args.resume
@@ -207,7 +207,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", args.save_file_name, "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation", "--num_epochs", "2"])
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"]) # 
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -224,6 +224,7 @@ def main(args):
             print("Sampling new data")
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
+
             # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
             # if isinstance(model_config, LlamaConfig):
             #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
@@ -242,40 +243,41 @@ def main(args):
             # add_padding_token(tokenizer)
 
             #remove the sampled data from the pool data with .filter()
-            # pool_data.set_format('pandas')
-            # df = pool_data[:]
-            # df = df[~df.index.isin(sampled_data['id'])]
-            # pool_data = Dataset.from_pandas(df, preserve_index=False)
+            if args.random_pool_fraction:
+                pool_data.set_format('pandas')
+                df = pool_data[:]
+                df = df[~df.index.isin(sampled_data['id'])]
+                pool_data = Dataset.from_pandas(df, preserve_index=False)
+                shrinked_pool_data = pool_data.shuffle(seed=args.seed).select(range(pool_data_count))
+            else:
+                with open('clusters.pkl', 'rb') as f:
+                    clusters = pickle.load(f)
+                random.seed(args.seed)
+                sampled_clusters = random.choices(list(clusters.keys()), k=pool_data_count)
+                shrinked_pool_data = {
+                    'id': [],
+                    'instruction': [],
+                    'input': [],
+                    'output': []
+                }
+                # sampled_data = datasets.load_dataset('json', data_files=args.save_file_name, split='train')
+                sampled_data_ids = set(sampled_data['id'])
+                for c in tqdm(sampled_clusters):
+                    idx = random.sample(range(len(clusters[c])), 1)[0]
+                    sample_id = int(clusters[c][idx][0])  # getting the int from numpy.int64
+                    while sample_id in sampled_data_ids:  # we want to get a fresh sample from pool that isn't already present in the training set
+                        sample_cluster = random.sample(list(clusters.keys()), 1)[0]
+                        idx = random.sample(range(len(clusters[sample_cluster])), 1)[0]
+                        sample_id = int(clusters[sample_cluster][idx][0])
+                    shrinked_pool_data['id'].append(pool_data[sample_id]['id'])
+                    shrinked_pool_data['instruction'].append(pool_data[sample_id]['instruction'])
+                    shrinked_pool_data['input'].append(pool_data[sample_id]['input'])
+                    shrinked_pool_data['output'].append(pool_data[sample_id]['output'])
 
-            with open('clusters.pkl', 'rb') as f:
-                clusters = pickle.load(f)
-            random.seed(args.seed)
-            sampled_clusters = random.choices(list(clusters.keys()), k=pool_data_count)
-            cluster_sampling_data = {
-                'id': [],
-                'instruction': [],
-                'input': [],
-                'output': []
-            }
-            from IPython import embed; embed()
-            # sampled_data = datasets.load_dataset('json', data_files=args.save_file_name, split='train')
-            sampled_data_ids = set(sampled_data['id'])
-            for c in tqdm(sampled_clusters):
-                idx = random.sample(range(len(clusters[c])), 1)[0]
-                sample_id = int(clusters[c][idx][0])  # getting the int from numpy.int64
-                while sample_id in sampled_data_ids:  # we want to get a fresh sample from pool that isn't already present in the training set
-                    sample_cluster = random.sample(list(clusters.keys()), 1)[0]
-                    idx = random.sample(range(len(clusters[sample_cluster])), 1)[0]
-                    sample_id = int(clusters[sample_cluster][idx][0])
-                cluster_sampling_data['id'].append(pool_data[sample_id]['id'])
-                cluster_sampling_data['instruction'].append(pool_data[sample_id]['instruction'])
-                cluster_sampling_data['input'].append(pool_data[sample_id]['input'])
-                cluster_sampling_data['output'].append(pool_data[sample_id]['output'])
-
-            cluster_sampling_data = Dataset.from_dict(cluster_sampling_data)
+                shrinked_pool_data = Dataset.from_dict(shrinked_pool_data)
             ## preprocess
             eval_preproc = partial(apply_conv_template)
-            cluster_sampling_data = cluster_sampling_data.map(eval_preproc)
+            shrinked_pool_data = shrinked_pool_data.map(eval_preproc)
             num_processes = num_gpus = torch.cuda.device_count()
             try:
                 mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
@@ -284,7 +286,7 @@ def main(args):
             result_list = mp.Manager().list()
             processes = []
             for rank in range(num_processes):
-                p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, cluster_sampling_data.shard(num_shards=num_gpus, index=rank), result_list))
+                p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, shrinked_pool_data.shard(num_shards=num_gpus, index=rank), result_list))
                 p.start()
                 processes.append(p)
 
@@ -303,9 +305,26 @@ def main(args):
             # ppl_freq = Counter(dataset_w_ppl['ppl'])
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
-                acquisition_samples = dataset_w_ppl.select(range(1000))
+                if args.mixed_sampling:
+                    # select 70% of the data from the top with high ppl and 30% of the data with low ppl
+                    top_70 = int(0.9*1000)
+                    bottom_30 = 1000 - top_70
+                    top_70_data = dataset_w_ppl.select(range(top_70))
+                    bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+                    acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
+                else:
+                    acquisition_samples = dataset_w_ppl.select(range(1000))
             else:
-                acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
+                if args.mixed_sampling:
+                    # select 70% of the data from the top with high ppl and 30% of the data with low ppl
+                    samples_to_be_added = al_data_count-len(sampled_data)
+                    top_70 = int(0.9*samples_to_be_added)
+                    bottom_30 = samples_to_be_added - top_70
+                    top_70_data = dataset_w_ppl.select(range(top_70))
+                    bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+                    acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
+                else:
+                    acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
             acquisition_samples = acquisition_samples.remove_columns('ppl')
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
@@ -317,7 +336,7 @@ def main(args):
             print("#"*100)
             os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/home/ksaifullah/llama2_7B_sharded", "--model_config_path", "/home/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation", "--num_epochs", "2"])
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"]) # 
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -329,16 +348,16 @@ def main(args):
     print("Converting to HF")
     print("#"*100)
     cmd = ["python", "convert_fsdp_to_hf.py"]
-    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path}_hf", "--config_path", args.model_config_path])
+    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path.split('/')[-1]}_hf", "--config_path", args.model_config_path])
     result = subprocess.run(cmd)
 
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/home/ksaifullah/llama2_7B_sharded", type=str)
-    parser.add_argument("--model_name", default=None, type=str)
-    parser.add_argument("--model_config_path", default="/home/ksaifullah/llama2_7B_hf", type=str)
+    parser.add_argument("--model", default="/sensei-fs/users/ksaifullah/llama2_7B_sharded", type=str)
+    parser.add_argument("--model_path", default=None, type=str)
+    parser.add_argument("--model_config_path", default="/sensei-fs/users/ksaifullah/llama2_7B_hf", type=str)
     parser.add_argument("--template_type", default="alpaca", type=str)
     parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
     parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
@@ -348,6 +367,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
     parser.add_argument("--resume", action='store_true', help="This will resume the training from a AL checkpoint.")
+    parser.add_argument("--random_pool_fraction", action='store_true', help="Randomly select subset of the data for pool set.")
+    parser.add_argument("--mixed_sampling", action='store_true', help="If active, along with most uncertain examples we also pick few certain ones")
     parser.add_argument("--resume_checkpoint_path", default=None, type=str, help="AL checkpoint path to resume from.")
     args = parser.parse_args()
     main(args)
