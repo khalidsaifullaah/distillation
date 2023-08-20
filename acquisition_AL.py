@@ -66,6 +66,9 @@ def smart_tokenizer_and_embedding_resize(
     Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
     """
     num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    # if args.sampling_strategy == "generation_ppl":
+    #     model.resize_token_embeddings(32008) # making a multiple of 8
+    # else:
     model.resize_token_embeddings(len(tokenizer))
 
     if num_new_tokens > 0:
@@ -81,8 +84,10 @@ def smart_tokenizer_and_embedding_resize(
 def apply_conv_template(example):
     # preprocess instructions into prompted inputs
     prompt_input, prompt_no_input, confidence_prompt = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"], PROMPT_DICT["confidence_prompt"]
-    source  = prompt_input.format_map(example) if example.get("instruction", "") != "" else prompt_no_input.format_map(example)
-    # source = confidence_prompt.format_map(example)
+    if args.sampling_strategy != "self_ask":
+        source  = prompt_input.format_map(example) if example.get("instruction", "") != "" else prompt_no_input.format_map(example)
+    else:
+        source = confidence_prompt.format_map(example)
     example.update({
         "prompt": source
     })
@@ -113,38 +118,56 @@ def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None)
     encoding.pop('token_type_ids', None)
     encoding = {k: v.to(f"cuda:{device}") for k,v in encoding.items()}
     with torch.no_grad():
-        model_output = model(**encoding)
-        if torch.isnan(model_output.logits).any():
-            print("NAN")
-        loss = get_clm_loss(encoding['input_ids'], model_output.logits.float())
-        # kwargs['max_new_tokens'] = 3
-        # model_output = model.generate(**encoding, **kwargs)
-        # logits = torch.nan_to_num(torch.stack(model_output.scores).transpose(0,1))
-        # token_probs = torch.nn.functional.softmax(logits, dim=-1)
-        # confidence = token_probs[:, :, torch.tensor([1939,694])].view(len(prompt), -1).mean(dim=-1).tolist() # 1939: No, 694: no
-        # labels = model_output.sequences[:, encoding['input_ids'].shape[-1]:]
-        # ppl = loss = get_clm_loss(labels, logits.float()) # using log perplexity
-        log_ppl = loss.tolist()
-        # input_len = encoding['input_ids'].shape[-1]
-        # output_sequences = model_output.sequences[:, input_len:].cpu()
-        # decoded_output = tokenizer.batch_decode(output_sequences, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+        if args.sampling_strategy == "forward_ppl":
+            model_output = model(**encoding)
+            if torch.isnan(model_output.logits).any():
+                print("NAN")
+            loss = get_clm_loss(encoding['input_ids'], model_output.logits.float())
+            log_ppl = loss.tolist()
+        elif args.sampling_strategy == "generation_ppl":
+            model_output = model.generate(**encoding, **kwargs)
+            # logits = torch.nan_to_num(torch.stack(model_output.scores).transpose(0,1))
+            logits = torch.stack(model_output.scores).transpose(0,1)
+            if torch.isnan(logits).any():
+                print("NAN")
+            labels = model_output.sequences[:, encoding['input_ids'].shape[-1]:]
+            loss = get_clm_loss(labels, logits.float()) # using log perplexity
+            log_ppl = loss.tolist()
+        elif args.sampling_strategy == "self_ask":
+            kwargs['max_new_tokens'] = 3
+            model_output = model.generate(**encoding, **kwargs)
+            logits = torch.nan_to_num(torch.stack(model_output.scores).transpose(0,1))
+            token_probs = torch.nn.functional.softmax(logits, dim=-1)
+            confidence = token_probs[:, :, torch.tensor([1939,694])].view(len(prompt), -1).mean(dim=-1).tolist() # 1939: No, 694: no
+            del example['prompt']
+            # input_len = encoding['input_ids'].shape[-1]
+            # output_sequences = model_output.sequences[:, input_len:].cpu()
+            # decoded_output = tokenizer.batch_decode(output_sequences, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            return confidence
+            # return decoded_output, 
+        else:
+            print("Invalid sampling strategy")
+            raise NotImplementedError
 
     del example['prompt']
     # example.update({"ppl": log_ppl})
     # example.update({"decoded_output": decoded_output})
     # return example
     return log_ppl
-    # return confidence
 
 def inference_worker(rank, sharded_model_path, data_partition, result_list):
+    from optimum.bettertransformer import BetterTransformer
     gpu = rank
     model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
     model = load_fsdp_ckpt_with_accelerate(sharded_model_path, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer", rank=gpu)
+    model.eval()
+    model = BetterTransformer.transform(model)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             args.model_config_path,
             model_max_length=2048,
             padding_side="left",
             use_fast=True,
+            pad_to_multiple_of=8,
         )
     special_tokens_dict = dict()
     if tokenizer.pad_token is None:
@@ -160,10 +183,10 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
                 tokenizer=tokenizer,
                 model=model,
             )
-    model.eval()
-    generate_kwargs = dict(max_new_tokens=256, do_sample=False, temperature=0.6,
-        num_return_sequences=1, output_scores=True, return_dict_in_generate=True, 
-        stopping_criteria=StoppingCriteriaList([StopOnTokens()]))
+    generate_kwargs = dict(max_new_tokens=256, do_sample=False, temperature=0.7,
+        num_return_sequences=1, output_scores=True, return_dict_in_generate=True,
+        # stopping_criteria=StoppingCriteriaList([StopOnTokens()])
+    )
     get_ppl = partial(compute_perplexity_batched, 
                     model=model,  
                     tokenizer=tokenizer,
@@ -207,7 +230,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"]) # 
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -225,28 +248,11 @@ def main(args):
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
 
-            # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
-            # if isinstance(model_config, LlamaConfig):
-            #     model_config.vocab_size += 1 # hardcode the vocab size for llama...
-            # model = load_fsdp_ckpt_with_accelerate(args.model, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer", rank=0)
-            # # cmd = ["python", "convert_fsdp_to_hf.py"]
-            # # cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"{model_path}_hf", "--config_path", args.model_config_path])
-            # # result = subprocess.run(cmd)
-
-            # # model = transformers.AutoModelForCausalLM.from_pretrained(f"{model_path}_hf", torch_dtype=torch.bfloat16, trust_remote_code=True)
-            # tokenizer = transformers.AutoTokenizer.from_pretrained(
-            #         f"{model_path}_hf",
-            #         model_max_length=2048,
-            #         padding_side="left",
-            #         use_fast=True,
-            #     )
-            # add_padding_token(tokenizer)
-
-            #remove the sampled data from the pool data with .filter()
             if args.random_pool_fraction:
+                print("removing sampled data from pool")
                 pool_data.set_format('pandas')
                 df = pool_data[:]
-                df = df[~df.index.isin(sampled_data['id'])]
+                df = df[~df['id'].isin(set(sampled_data['id']))]
                 pool_data = Dataset.from_pandas(df, preserve_index=False)
                 shrinked_pool_data = pool_data.shuffle(seed=args.seed).select(range(pool_data_count))
             else:
@@ -299,18 +305,18 @@ def main(args):
             gc.collect()
             torch.cuda.empty_cache()
             dataset_w_ppl = datasets.concatenate_datasets(result_list)
+
+            # dataset_w_ppl = dataset_w_ppl.sort('ppl')
             dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
-            # count the frequency of ppl in the dataset
-            # from collections import Counter
-            # ppl_freq = Counter(dataset_w_ppl['ppl'])
             # we don't want to add more data than the total data count
             if len(sampled_data)+1000 <= al_data_count:
                 if args.mixed_sampling:
                     # select 70% of the data from the top with high ppl and 30% of the data with low ppl
-                    top_70 = int(0.9*1000)
+                    top_70 = int(0.5*1000)
                     bottom_30 = 1000 - top_70
                     top_70_data = dataset_w_ppl.select(range(top_70))
                     bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+                    # bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
                     acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
                 else:
                     acquisition_samples = dataset_w_ppl.select(range(1000))
@@ -318,10 +324,11 @@ def main(args):
                 if args.mixed_sampling:
                     # select 70% of the data from the top with high ppl and 30% of the data with low ppl
                     samples_to_be_added = al_data_count-len(sampled_data)
-                    top_70 = int(0.9*samples_to_be_added)
+                    top_70 = int(0.5*samples_to_be_added)
                     bottom_30 = samples_to_be_added - top_70
                     top_70_data = dataset_w_ppl.select(range(top_70))
                     bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+                    # bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
                     acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
                 else:
                     acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
@@ -334,9 +341,9 @@ def main(args):
             print("Training on new data")
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
-            os.system(f"rm -rf {model_path}_sharded")
+            # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"]) # 
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -370,5 +377,8 @@ if __name__ == "__main__":
     parser.add_argument("--random_pool_fraction", action='store_true', help="Randomly select subset of the data for pool set.")
     parser.add_argument("--mixed_sampling", action='store_true', help="If active, along with most uncertain examples we also pick few certain ones")
     parser.add_argument("--resume_checkpoint_path", default=None, type=str, help="AL checkpoint path to resume from.")
+    parser.add_argument("--model_ask", action='store_true', help="if active we'll ask the model about instruction.")
+    parser.add_argument("--sampling_strategy", default="forward_ppl", type=str, help="Sampling strategy for AL.")
     args = parser.parse_args()
+    print(args)
     main(args)
