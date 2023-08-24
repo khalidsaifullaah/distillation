@@ -229,7 +229,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -342,7 +342,7 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
