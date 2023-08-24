@@ -208,11 +208,10 @@ def main(args):
     # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
-    sampled_data = pool_data.shuffle(seed=args.seed).select(range(1000))
+    sampled_data = pool_data.shuffle(seed=args.seed).select(range(args.num_acquisition_samples))
 
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
-
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
@@ -230,7 +229,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
 
@@ -309,17 +308,17 @@ def main(args):
             # dataset_w_ppl = dataset_w_ppl.sort('ppl')
             dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
             # we don't want to add more data than the total data count
-            if len(sampled_data)+1000 <= al_data_count:
+            if len(sampled_data)+args.num_acquisition_samples <= al_data_count:
                 if args.mixed_sampling:
                     # select 70% of the data from the top with high ppl and 30% of the data with low ppl
-                    top_70 = int(0.5*1000)
-                    bottom_30 = 1000 - top_70
+                    top_70 = int(0.5*args.num_acquisition_samples)
+                    bottom_30 = args.num_acquisition_samples - top_70
                     top_70_data = dataset_w_ppl.select(range(top_70))
                     bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
                     # bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
                     acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
                 else:
-                    acquisition_samples = dataset_w_ppl.select(range(1000))
+                    acquisition_samples = dataset_w_ppl.select(range(args.num_acquisition_samples))
             else:
                 if args.mixed_sampling:
                     # select 70% of the data from the top with high ppl and 30% of the data with low ppl
@@ -343,7 +342,7 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_13B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_13B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "no_shuffle"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -379,6 +378,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume_checkpoint_path", default=None, type=str, help="AL checkpoint path to resume from.")
     parser.add_argument("--model_ask", action='store_true', help="if active we'll ask the model about instruction.")
     parser.add_argument("--sampling_strategy", default="forward_ppl", type=str, help="Sampling strategy for AL.")
+    parser.add_argument("--num_acquisition_samples", default=1000, type=int)
     args = parser.parse_args()
     print(args)
     main(args)

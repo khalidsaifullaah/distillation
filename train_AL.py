@@ -349,7 +349,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--use_hidden_states", action='store_true')
     parser.add_argument("--use_attention_scores", action='store_true')
-    parser.add_argument("--filtering_method", type=str, choices=["random", "cluster"], default="random")
+    parser.add_argument("--filtering_method", type=str, choices=["random", "cluster", "no_shuffle"], default="random")
 
     parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer", "GPTBlock", "MPTBlock"], default="GPTBlock",
                         help="the name of the class that is wrapped by the FSDP module")

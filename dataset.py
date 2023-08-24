@@ -101,9 +101,11 @@ class SupervisedDataset(Dataset):
             used_data_count = int(len(data_dict)*data_fraction)
             if filtering_method == 'random':
                 data_dict = data_dict.shuffle(seed=seed).select(range(used_data_count))
+            elif filtering_method == 'no_shuffle':
+                data_dict = data_dict.select(range(used_data_count))
             elif filtering_method == 'cluster':
                 print("filtering data based on clusters")
-                with open('/sensei-fs/users/ksaifullah/clusters.pkl', 'rb') as f:
+                with open('/sensei-fs/users/ksaifullah/bigger_cluster.pkl', 'rb') as f:
                     clusters = pickle.load(f)
                 random.seed(seed)
                 sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
