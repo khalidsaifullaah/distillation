@@ -2,6 +2,7 @@
 import argparse
 from functools import partial
 import json
+import os
 from typing import Dict
 
 from datasets import Dataset
@@ -92,7 +93,32 @@ def generate_responses_batched(example, model, tokenizer, kwargs):
 
     return example
 
-def inference_worker(rank, model, tokenizer, data_partition, result_list):
+def inference_worker(rank, sharded_model_path, data_partition, result_list):
+    gpu = rank
+    model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
+    model = load_fsdp_ckpt_with_accelerate(sharded_model_path, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer", rank=gpu)
+    model.eval()
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+            args.model_config_path,
+            model_max_length=2048,
+            padding_side="left",
+            use_fast=True,
+            pad_to_multiple_of=8,
+        )
+    special_tokens_dict = dict()
+    if tokenizer.pad_token is None:
+        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+    smart_tokenizer_and_embedding_resize(
+                special_tokens_dict=special_tokens_dict,
+                tokenizer=tokenizer,
+                model=model,
+            )
     gpu = rank
     device = torch.device(f'cuda:{gpu}')
     model = model.to(device)
@@ -113,7 +139,7 @@ def inference_worker(rank, model, tokenizer, data_partition, result_list):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/fs/nexus-scratch/pchiang/llama/7B_sharded", type=str)
+    parser.add_argument("--sharded_model", default="/fs/nexus-scratch/pchiang/llama/7B_sharded", type=str)
     parser.add_argument("--model_name", default=None, type=str)
     parser.add_argument("--model_config_path", default="/fs/nexus-scratch/pchiang/llama/7B_hf", type=str)
     parser.add_argument("--template_type", default="alpaca", type=str)
@@ -122,37 +148,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
     args = parser.parse_args()
-
-    model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
-    if isinstance(model_config, LlamaConfig):
-        model_config.vocab_size += 1 # hardcode the vocab size for llama... 
-    model = transformers.AutoModelForCausalLM.from_pretrained(args.model_config_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    # model = load_fsdp_ckpt_with_accelerate(args.model, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer" if 'llama' in args.model else "OPTDecoderLayer")
-    
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-            args.model_config_path,
-            model_max_length=2048,
-            padding_side="left",
-            use_fast=False,
-        )
-    special_tokens_dict = dict()
-    if tokenizer.pad_token is None:
-        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-    if tokenizer.eos_token is None:
-        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
-    if tokenizer.bos_token is None:
-        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
-    if tokenizer.unk_token is None:
-        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
-    smart_tokenizer_and_embedding_resize(
-                special_tokens_dict=special_tokens_dict,
-                tokenizer=tokenizer,
-                model=model,
-            )
-    
-    ## set the models to eval mode
-    model = model.eval()
-    
     
     if "dolly" in args.file_path or "vicuna" in args.file_path or "user_oriented_instructions" in args.file_path:
         tasks = load_jsonlines(args.file_path)
@@ -167,7 +162,7 @@ if __name__ == "__main__":
     elif "alpaca_eval" in args.file_path:
         raw_data = datasets.load_dataset("tatsu-lab/alpaca_eval", "alpaca_eval")["eval"]
         # set generator field to model name
-        raw_data = raw_data.map(lambda x: {"generator": args.model_name if args.model_name else args.model_config_path})
+        raw_data = raw_data.map(lambda x: {"generator": args.sharded_model if args.sharded_model else args.model_config_path})
 
     # reduce number of examples for debugging
     if args.debug:
@@ -177,6 +172,7 @@ if __name__ == "__main__":
     eval_preproc = partial(apply_conv_template, template_type=args.template_type)
     raw_data = raw_data.map(eval_preproc)
     num_processes = num_gpus = torch.cuda.device_count()
+    sharded_model_path = f"{args.sharded_model}/{os.listdir(f'{args.sharded_model}')[0]}/model"
     try:
         mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
     except RuntimeError:
@@ -184,7 +180,7 @@ if __name__ == "__main__":
     result_list = mp.Manager().list()
     processes = []
     for rank in range(num_processes):
-        p = mp.Process(target=inference_worker, args=(rank, model, tokenizer, raw_data.shard(num_shards=num_gpus, index=rank), result_list))
+        p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, raw_data.shard(num_shards=num_gpus, index=rank), result_list))
         p.start()
         processes.append(p)
 
