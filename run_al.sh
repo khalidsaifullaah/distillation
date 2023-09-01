@@ -88,35 +88,118 @@
 
 # alpaca_eval --model_outputs dolphin_llama2_7B_dfrac_0.01_random.json --annotators_config claude
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.01 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.01 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.1 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.1 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.3 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.3 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.5 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.5 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.3 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.7 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.7 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.9 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.9 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl.json
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.99 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl.json
 
-python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.99 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl
-python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl.json --annotators_config claude
 
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --mixed_sampling --mixed_sampling_factor 0.1 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_cluster_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_cluster_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_cluster_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_cluster_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json --annotators_config claude
 
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.01_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.3_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.5_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.7_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.9_bottom_forward_ppl.json --annotators_config claude
-alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_mixed_sampling_rand_0.99_bottom_forward_ppl.json --annotators_config claude
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --sampling_strategy cluster --num_acquisition_samples 100 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_cluster_sampling
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_cluster_sampling_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_cluster_sampling.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_cluster_sampling.json --annotators_config claude
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --sampling_strategy random --num_acquisition_samples 100 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_sampling --resume --resume_checkpoint_path ../al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_sharded
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_sampling.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_sampling.json --annotators_config claude
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --sampling_strategy random --num_acquisition_samples 373 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_once
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_once_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_once.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_sampling_once.json --annotators_config claude
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --sampling_strategy random --num_acquisition_samples 100 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_random_sampling
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_random_sampling_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_random_sampling.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --mixed_sampling --mixed_sampling_factor 0.1 --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_forward_ppl.json
+
+# python train_AL.py \
+# --init_checkpoint_path /sensei-fs/users/ksaifullah/llama2_7B_sharded \
+# --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_0.02_random \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method random --dont_save_opt --num_epochs 2 --data_fraction 0.0002 --batch_size 1 --accumulation_steps 8
+# python eval_generate.py --sharded_model ../dolphin_llama2_7B_dfrac_0.02_random --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name dolphin_llama2_7B_dfrac_0.02_random.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl.json
+
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_random_sampling.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_mixed_sampling_rand_0.1_bottom_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs dolphin_llama2_7B_dfrac_0.02_random.json --annotators_config claude
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_fixed_random_poolfrac_0.01_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_fixed_random_poolfrac_0.01_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/ --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_fixed_random_poolfrac_0.01_forward_ppl.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_fixed_random_poolfrac_0.01_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_fixed_random_poolfrac_0.01_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/ --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_fixed_random_poolfrac_0.01_forward_ppl.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0005 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_forward_ppl.json
+
+# python train_AL.py \
+# --init_checkpoint_path /sensei-fs/users/ksaifullah/llama2_7B_sharded \
+# --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf \
+# --checkpoint_path ~/dolphin_llama2_7B_dfrac_0.05_random \
+# --wrapped_class_name LlamaDecoderLayer \
+# --data_path datasets/dolphin.jsonl \
+# --hack --filtering_method random --dont_save_opt --num_epochs 2 --data_fraction 0.0005 --batch_size 1 --accumulation_steps 8
+# python eval_generate.py --sharded_model ../dolphin_llama2_7B_dfrac_0.05_random --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name dolphin_llama2_7B_dfrac_0.05_random.json
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_instruct_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_instruct_forward_ppl.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+
+python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0005 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_instruct_forward_ppl
+python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_instruct_forward_ppl.json
+
+python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0008 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0008_random_poolfrac_0.01_instruct_forward_ppl --resume --resume_checkpoint_path ../al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_instruct_forward_ppl_sharded
+python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0008_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0008_random_poolfrac_0.01_instruct_forward_ppl.json
+
+python acquisition_AL.py --batch_size 4 --al_data_fraction 0.001 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.001_random_poolfrac_0.01_instruct_forward_ppl --resume --resume_checkpoint_path ../al_dolphin_llama2_7B_dfrac_0.0008_random_poolfrac_0.01_instruct_forward_ppl_sharded
+python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.001_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.001_random_poolfrac_0.01_instruct_forward_ppl.json
+
+alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0008_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.001_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+
+# python acquisition_AL.py --batch_size 4 --al_data_fraction 0.0002 --cluster_data_fraction 0.01 --num_acquisition_samples 100 --random_pool_fraction --model_path /home/ksaifullah/al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl
+# python eval_generate.py --sharded_model ../al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl_sharded --model_config_path /sensei-fs/users/ksaifullah/llama2_7B_hf/  --file_path alpaca_eval --save_file_name al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl.json
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_random_poolfrac_0.01_instruct_forward_ppl.json --annotators_config claude
+
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0001_fixed_random_poolfrac_0.01_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0002_fixed_random_poolfrac_0.01_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs al_dolphin_llama2_7B_dfrac_0.0005_random_poolfrac_0.01_forward_ppl.json --annotators_config claude
+# alpaca_eval --model_outputs dolphin_llama2_7B_dfrac_0.05_random.json --annotators_config claude

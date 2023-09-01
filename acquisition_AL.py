@@ -108,7 +108,8 @@ def get_clm_loss(labels, lm_logits):
     return loss_per_example
 
 def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None):
-    prompt = example['prompt']
+    # prompt = example['prompt']
+    prompt = example['input']
     encoding = tokenizer(prompt, 
                           return_tensors="pt",
                           padding="longest",
@@ -208,10 +209,13 @@ def main(args):
     # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
-    sampled_data = pool_data.shuffle(seed=args.seed).select(range(args.num_acquisition_samples))
-
+    pool_data = pool_data.shuffle(seed=args.seed)
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
+    # ### TEMP ###
+    # pool_data = pool_data.select(range(pool_data_count))
+    # ### TEMP ###
+    sampled_data = pool_data.select(range(args.num_acquisition_samples))
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
@@ -271,6 +275,15 @@ def main(args):
                     shrinked_pool_data['output'].append(pool_data[sample_id]['output'])
 
                 dataset_w_ppl = Dataset.from_dict(shrinked_pool_data)
+            elif args.sampling_strategy == "random":
+                print("removing sampled data from pool")
+                pool_data.set_format('pandas')
+                df = pool_data[:]
+                df = df[~df['id'].isin(set(sampled_data['id']))]
+                pool_data = Dataset.from_pandas(df, preserve_index=False)
+                pool_data = pool_data.shuffle(seed=args.seed)
+                shrinked_pool_data = pool_data.select(range(args.num_acquisition_samples))
+                dataset_w_ppl = shrinked_pool_data
             else:
                 if args.random_pool_fraction:
                     print("removing sampled data from pool")
@@ -278,6 +291,9 @@ def main(args):
                     df = pool_data[:]
                     df = df[~df['id'].isin(set(sampled_data['id']))]
                     pool_data = Dataset.from_pandas(df, preserve_index=False)
+                    # ### TEMP ###
+                    # shrinked_pool_data = pool_data
+                    # ### TEMP ###
                     pool_data = pool_data.shuffle(seed=args.seed)
                     shrinked_pool_data = pool_data.select(range(pool_data_count))
                 else:
