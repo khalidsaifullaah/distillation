@@ -105,7 +105,7 @@ class SupervisedDataset(Dataset):
                 data_dict = data_dict.select(range(used_data_count))
             elif filtering_method == 'cluster':
                 print("filtering data based on clusters")
-                with open('/sensei-fs/users/ksaifullah/bigger_cluster.pkl', 'rb') as f:
+                with open('/sensei-fs/users/ksaifullah/dolphin_instructions_cluster_sbert.pkl', 'rb') as f:
                     clusters = pickle.load(f)
                 random.seed(seed)
                 sampled_clusters = random.choices(list(clusters.keys()), k=used_data_count)
@@ -115,13 +115,13 @@ class SupervisedDataset(Dataset):
                     'output': []
                 }
                 for c in sampled_clusters:
-                    idx = random.sample(range(len(clusters[c])), 1)[0]
+                    idx = random.sample(range(len(clusters[c]))[:3], 1)[0]
                     sample_id = int(clusters[c][idx][0])  # getting the int from numpy.int64
                     filtered_data['instruction'].append(data_dict[sample_id]['instruction'])
                     filtered_data['input'].append(data_dict[sample_id]['input'])
                     filtered_data['output'].append(data_dict[sample_id]['output'])
-
                 data_dict = HFDataset.from_dict(filtered_data)
+                data_dict.to_json("train_data.jsonl")
             else:
                 raise ValueError(f"Unexpected filtering method: {filtering_method}, choose from ['random', 'cluster']")
             print(f"using {used_data_count} data out of {len(data_dict)}")

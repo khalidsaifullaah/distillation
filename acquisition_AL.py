@@ -108,8 +108,8 @@ def get_clm_loss(labels, lm_logits):
     return loss_per_example
 
 def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None):
-    # prompt = example['prompt']
-    prompt = example['input']
+    prompt = example['prompt']
+    # prompt = example['input']
     encoding = tokenizer(prompt, 
                           return_tensors="pt",
                           padding="longest",
@@ -350,33 +350,67 @@ def main(args):
                 # dataset_w_ppl = dataset_w_ppl.sort('ppl')
                 dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
                 print(f"Most uncertain example: {dataset_w_ppl['input'][0]}")
+
             # we don't want to add more data than the total data count
             if len(sampled_data)+args.num_acquisition_samples <= al_data_count:
-                if args.mixed_sampling:
-                    # select 70% of the data from the top with high ppl and 30% of the data with low ppl
-                    top_70 = int(args.mixed_sampling_factor*args.num_acquisition_samples)
-                    bottom_30 = args.num_acquisition_samples - top_70
-                    top_70_data = dataset_w_ppl.select(range(top_70))
-                    # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
-                    bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
-                    acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
-                else:
-                    acquisition_samples = dataset_w_ppl.select(range(args.num_acquisition_samples))
+                num_acquisition_samples = args.num_acquisition_samples
             else:
-                if args.mixed_sampling:
-                    # select 70% of the data from the top with high ppl and 30% of the data with low ppl
-                    samples_to_be_added = al_data_count-len(sampled_data)
-                    top_70 = int(args.mixed_sampling_factor*samples_to_be_added)
-                    bottom_30 = samples_to_be_added - top_70
-                    top_70_data = dataset_w_ppl.select(range(top_70))
-                    # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
-                    bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
-                    acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
-                else:
-                    acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
+                num_acquisition_samples = al_data_count-len(sampled_data)
+            if args.stratification_strategy == "mixed":
+                # select 70% of the data from the top with high ppl and 30% of the data with low ppl
+                top_70 = int(args.mixed_sampling_factor*num_acquisition_samples)
+                bottom_30 = num_acquisition_samples - top_70
+                top_70_data = dataset_w_ppl.select(range(top_70))
+                # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+                bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
+                acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
+            elif args.stratification_strategy == "bucket":
+                print("Using bucketing")
+                stratified_data = []
+                examples_per_bucket = num_acquisition_samples//args.num_k
+                total_acquisitions = 0
+                for i in range(args.num_k):
+                    data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket))
+                    total_acquisitions += len(data_shard)
+                    if i == args.num_k-1 and total_acquisitions < num_acquisition_samples:
+                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+                    stratified_data.append(data_shard)
+                acquisition_samples = datasets.concatenate_datasets(stratified_data)
+            else:
+                acquisition_samples = dataset_w_ppl.select(range(num_acquisition_samples))
+            # else:
+            #     if args.stratification_strategy == "mixed":
+            #         # select 70% of the data from the top with high ppl and 30% of the data with low ppl
+            #         samples_to_be_added = al_data_count-len(sampled_data)
+            #         top_70 = int(args.mixed_sampling_factor*samples_to_be_added)
+            #         bottom_30 = samples_to_be_added - top_70
+            #         top_70_data = dataset_w_ppl.select(range(top_70))
+            #         # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
+            #         bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
+            #         acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
+            #     elif args.stratification_strategy == "bucket":
+            #         stratified_data = []
+            #         num_acquisition_samples = al_data_count-len(sampled_data)
+            #         examples_per_bucket = num_acquisition_samples//args.num_k
+            #         total_acquisitions = 0
+            #         for i in range(args.num_k):
+            #             data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i).select(range(examples_per_bucket))
+            #             total_acquisitions += len(data_shard)
+            #             if i == args.num_k-1 and total_acquisitions < num_acquisition_samples:
+            #                 data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+            #             stratified_data.append(data_shard)
+            #         acquisition_samples = datasets.concatenate_datasets(stratified_data)
+            #     else:
+            #         acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
             # acquisition_samples = acquisition_samples.remove_columns('ppl')
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
+
+            if args.decay_k:
+                if args.num_k-1 == 0:
+                    args.num_k = 1
+                else:
+                    args.num_k -= 1
 
             steps += 1
             print("#"*100)
@@ -393,12 +427,12 @@ def main(args):
     with open('al_experiments_runtime.txt', 'a+') as f:
         f.write(f"{model_path}: {(end_time-start_time)/60} minutes\n")
 
-    print("#"*100)
-    print("Converting to HF")
-    print("#"*100)
-    cmd = ["python", "convert_fsdp_to_hf.py"]
-    cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path.split('/')[-1]}_hf", "--config_path", args.model_config_path])
-    result = subprocess.run(cmd)
+    # print("#"*100)
+    # print("Converting to HF")
+    # print("#"*100)
+    # cmd = ["python", "convert_fsdp_to_hf.py"]
+    # cmd.extend(["--load_path", f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model", "--save_path", f"/sensei-fs/users/ksaifullah/{model_path.split('/')[-1]}_hf", "--config_path", args.model_config_path])
+    # result = subprocess.run(cmd)
 
 
 
@@ -417,12 +451,14 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
     parser.add_argument("--resume", action='store_true', help="This will resume the training from a AL checkpoint.")
     parser.add_argument("--random_pool_fraction", action='store_true', help="Randomly select subset of the data for pool set.")
-    parser.add_argument("--mixed_sampling", action='store_true', help="If active, along with most uncertain examples we also pick few certain ones")
     parser.add_argument("--resume_checkpoint_path", default=None, type=str, help="AL checkpoint path to resume from.")
     parser.add_argument("--model_ask", action='store_true', help="if active we'll ask the model about instruction.")
     parser.add_argument("--sampling_strategy", default="forward_ppl", type=str, help="Sampling strategy for AL.")
     parser.add_argument("--num_acquisition_samples", default=1000, type=int)
+    parser.add_argument("--stratification_strategy", default="greedy", type=str, help="Sampling strategy for AL.")
     parser.add_argument("--mixed_sampling_factor", default=0.7, type=float)
+    parser.add_argument("--num_k", default=5, type=int)
+    parser.add_argument("--decay_k", action='store_true', help="Decay the number of buckets.")
     args = parser.parse_args()
     print(args)
     main(args)

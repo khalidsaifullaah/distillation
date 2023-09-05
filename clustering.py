@@ -120,63 +120,39 @@ def community_detection(embeddings, threshold=0.75, min_community_size=10, batch
 # Model for computing sentence embeddings. We use one trained for similar questions detection
 model = SentenceTransformer('all-mpnet-base-v2')
 
-data_path = "datasets/dolphin.jsonl"
+data_path = "/sensei-fs/users/ksaifullah/dolphin.jsonl"
 data_dict = load_dataset('json', data_files=data_path, split='train')
 max_corpus_size = len(data_dict)  # We limit our corpus to only the first 50k questions
 
-corpus_sentences = data_dict.map(lambda examples: {"text": [examples['instruction'][i]+' '+examples['input'][i] for i in range(len(examples['input']))]}, batched=True)['text']
-
-# corpus_sentences = list(corpus_sentences)
+# corpus_sentences = data_dict.map(lambda examples: {"text": [examples['instruction'][i]+' '+examples['input'][i] for i in range(len(examples['input']))]}, batched=True)['text']
+corpus_sentences = data_dict.map(lambda examples: {"text": [examples['input'][i] for i in range(len(examples['input']))]}, batched=True)
 print("Encode the corpus. This might take a while")
-# corpus_embeddings = model.encode(corpus_sentences, batch_size=2048, show_progress_bar=True, convert_to_numpy=True)
-# saving the embeddings as numpy array
-# np.save('dolphin_embeddings.npy', corpus_embeddings)
-corpus_embeddings = np.load('dolphin_embeddings.npy')
+corpus_embeddings = model.encode(corpus_sentences['text'], batch_size=1024, show_progress_bar=True, convert_to_numpy=True)
+np.save('/sensei-fs/users/ksaifullah/dolphin_embeddings.npy', corpus_embeddings)
+
+corpus_embeddings = np.load('/sensei-fs/users/ksaifullah/dolphin_embeddings.npy')
 ids = range(len(corpus_embeddings))
 embeddings = {idx: embedding for idx, embedding in zip(ids, corpus_embeddings)}
 clusters = {}
 print("Start clustering")
 start_time = time.time()
-
 #Two parameters to tune:
 #min_cluster_size: Only consider cluster that have at least 25 elements
 #threshold: Consider sentence pairs with a cosine-similarity larger than threshold as similar
 # clusters = util.community_detection(corpus_embeddings, min_community_size=25, threshold=0.75)
 clusters = online_community_detection(ids, embeddings, clusters, chunk_size=10000, threshold=0.75, min_cluster_size=25, cores=4)
-from IPython import embed; embed()
-print("Clustering done after {:.2f} sec".format(time.time() - start_time))
+end_time = time.time()
+print("Minutes taken for clustering: {}".format((end_time-start_time)/60))
+with open('/sensei-fs/users/ksaifullah/dolphin_instructions_cluster_sbert.pkl', 'wb') as f:
+    pickle.dump(clusters, f)
 
 #Print for all clusters the top 3 and bottom 3 elements
 for i, cluster in enumerate(clusters.values()):
     print("\nCluster {}, #{} Elements ".format(i+1, len(cluster)))
     for sentence_id in cluster[0:3]:
-        print("\t", corpus_sentences[sentence_id[0]])
+        print("\t", corpus_sentences[int(sentence_id[0])])
     print("\t", "...")
     for sentence_id in cluster[-3:]:
-        print("\t", corpus_sentences[sentence_id[0]])
-    if i>4:
+        print("\t", corpus_sentences[int(sentence_id[0])])
+    if i==0:
         break
-
-# with open('cluster.pkl', 'wb') as f:
-#     pickle.dump(clusters, f)
-
-
-# sample_size = 5000
-# random.seed(0)
-# sampled_clusters = random.sample(list(clusters.keys()), sample_size)
-# sampled_data = {
-#     'instruction': [],
-#     'input': [],
-#     'output': []
-# }   
-# for c in sampled_clusters:
-#     idx = random.sample(range(len(clusters[c])), 1)[0]
-#     sample_id = int(clusters[c][idx][0])  # getting the int from numpy.int64
-#     sampled_data['instruction'].append(data_dict[sample_id]['instruction'])
-#     sampled_data['input'].append(data_dict[sample_id]['input'])
-#     sampled_data['output'].append(data_dict[sample_id]['output'])
-
-# data_from_dict = Dataset.from_dict(sampled_data)
-
-# with open('clusters.pkl', 'rb') as f:
-#     loaded_dict = pickle.load(f)
