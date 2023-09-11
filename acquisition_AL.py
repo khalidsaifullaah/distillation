@@ -217,6 +217,7 @@ def main(args):
     # ### TEMP ###
     sampled_data = pool_data.select(range(args.num_acquisition_samples))
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
+    
     # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
     resume = args.resume
@@ -227,20 +228,21 @@ def main(args):
     while len(sampled_data) < al_data_count:
         if initial_run:
             # saving sampled data
-            sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
+            sampled_data.to_json(f"{args.save_file_name}")
             print("#"*100)
             print("Running seed training")
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
         else:
             if resume:
                 sharded_model_path = f"{args.resume_checkpoint_path}/{os.listdir(args.resume_checkpoint_path)[0]}/model"
                 prev_data_fraction = args.resume_checkpoint_path.split('dfrac_')[-1].split('_')[0]
-                prev_sampled_data_path = f"{args.save_file_name.split('.')[0]}_{prev_data_fraction}.json"
+                prev_sampled_data_path = f"outputs/{args.resume_checkpoint_path.split('../')[-1].split('_sharded')[0]}.json"
+                # prev_sampled_data_path = f"outputs/{args.resume_checkpoint_path.split('../')[-1]}"
                 sampled_data = datasets.load_dataset('json', data_files=prev_sampled_data_path, split='train')
                 resume = False
             else:
@@ -250,7 +252,7 @@ def main(args):
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             if args.sampling_strategy == "cluster":
-                with open('/sensei-fs/users/ksaifullah/clusters.pkl', 'rb') as f:
+                with open('/sensei-fs/users/ksaifullah/dolphin_instructions_cluster_sbert.pkl', 'rb') as f:
                     clusters = pickle.load(f)
                 random.seed(args.seed)
                 sampled_clusters = random.choices(list(clusters.keys()), k=args.num_acquisition_samples)
@@ -297,9 +299,10 @@ def main(args):
                     pool_data = pool_data.shuffle(seed=args.seed)
                     shrinked_pool_data = pool_data.select(range(pool_data_count))
                 else:
-                    with open('/sensei-fs/users/ksaifullah/clusters.pkl', 'rb') as f:
+                    print("Picking pool data from clusters...")
+                    with open('/sensei-fs/users/ksaifullah/dolphin_instructions_cluster_sbert.pkl', 'rb') as f:
                         clusters = pickle.load(f)
-                    random.seed(args.seed)
+                    random.seed(args.seed+steps)
                     sampled_clusters = random.choices(list(clusters.keys()), k=pool_data_count)
                     shrinked_pool_data = {
                         'id': [],
@@ -404,11 +407,11 @@ def main(args):
             #         acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
             # acquisition_samples = acquisition_samples.remove_columns('ppl')
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
-            sampled_data.to_json(f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json")
+            sampled_data.to_json(f"{args.save_file_name}")
 
             if args.decay_k:
-                if args.num_k-1 == 0:
-                    args.num_k = 1
+                if args.num_k-1 == 1:
+                    args.num_k = 2
                 else:
                     args.num_k -= 1
 
@@ -419,7 +422,7 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name.split('.')[0]}_{args.al_data_fraction}.json", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
