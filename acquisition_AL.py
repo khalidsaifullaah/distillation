@@ -162,7 +162,7 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
     model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
     model = load_fsdp_ckpt_with_accelerate(sharded_model_path, model_config, hf_dummy_path=args.model_config_path, wrapped_class="LlamaDecoderLayer", rank=gpu)
     model.eval()
-    model = BetterTransformer.transform(model)
+    # model = BetterTransformer.transform(model)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             args.model_config_path,
             model_max_length=2048,
@@ -234,7 +234,7 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
         else:
@@ -414,6 +414,7 @@ def main(args):
                     args.num_k = 2
                 else:
                     args.num_k -= 1
+                print(args.num_k)
 
             steps += 1
             print("#"*100)
@@ -422,7 +423,7 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", "/sensei-fs/users/ksaifullah/llama2_7B_sharded", "--model_config_path", "/sensei-fs/users/ksaifullah/llama2_7B_hf", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -438,12 +439,12 @@ def main(args):
     # result = subprocess.run(cmd)
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="/sensei-fs/users/ksaifullah/llama2_7B_sharded", type=str)
+    parser.add_argument("--init_checkpoint_path", default="/sensei-fs/users/ksaifullah/llama2_7B_sharded", type=str)
     parser.add_argument("--model_path", default=None, type=str)
     parser.add_argument("--model_config_path", default="/sensei-fs/users/ksaifullah/llama2_7B_hf", type=str)
+    parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--template_type", default="alpaca", type=str)
     parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
     parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
