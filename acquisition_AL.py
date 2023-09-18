@@ -20,10 +20,13 @@ from tqdm import tqdm
 import copy
 import train_AL
 import subprocess
+import matplotlib.pyplot as plt
 
 from io_utils import load_jsonlines
 from utils import load_fsdp_ckpt_with_accelerate, add_padding_token
 from conversation import get_conv_template
+
+from dataset import DataCollatorForSupervisedDataset
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
@@ -94,36 +97,56 @@ def apply_conv_template(example):
 
     return example
 
-def get_clm_loss(labels, lm_logits):
+def get_clm_loss(labels, lm_logits, tokenizer=None):
     # move labels to correct device to enable model parallelism
     labels = labels.to(lm_logits.device)
     # Shift so that tokens < n predict n
     shift_logits = lm_logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
     # Flatten the tokens
-    loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+    if IGNORE_INDEX not in labels:
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none", ignore_index=tokenizer.pad_token_id)
+    else:
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
     # get per-token loss
     loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
     loss_per_example = loss.view(shift_logits.size(0), shift_logits.size(1)).mean(axis=1)
     return loss_per_example
 
 def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None):
-    prompt = example['prompt']
-    # prompt = example['input']
-    encoding = tokenizer(prompt, 
-                          return_tensors="pt",
-                          padding="longest",
-                          max_length=tokenizer.model_max_length,
-                          truncation=True,
-                      )
-    encoding.pop('token_type_ids', None)
-    encoding = {k: v.to(f"cuda:{device}") for k,v in encoding.items()}
+    prompt, targets = example['prompt'], example['output']
+    if args.sampling_strategy == "data_pruning_w_answers":
+        data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+        prompts_w_answers_encoding = data_collator([{'sources': source, 'targets': target} for source,target in zip(prompt,targets)])
+        prompts_w_answers_encoding = {k: v.to(f"cuda:{device}") for k,v in prompts_w_answers_encoding.items()}
+        target_encoding = tokenizer(targets, return_tensors="pt", padding="longest", max_length=tokenizer.model_max_length, truncation=True)
+        target_encoding.pop('token_type_ids', None)
+        target_encoding = {k: v.to(f"cuda:{device}") for k,v in target_encoding.items()}
+    else:
+        encoding = tokenizer(prompt, 
+                            return_tensors="pt",
+                            padding="longest",
+                            max_length=tokenizer.model_max_length,
+                            truncation=True,
+                        )
+        encoding.pop('token_type_ids', None)
+        encoding = {k: v.to(f"cuda:{device}") for k,v in encoding.items()}
     with torch.no_grad():
         if args.sampling_strategy == "forward_ppl":
             model_output = model(**encoding)
             if torch.isnan(model_output.logits).any():
                 print("NAN")
-            loss = get_clm_loss(encoding['input_ids'], model_output.logits.float())
+            loss = get_clm_loss(encoding['input_ids'], model_output.logits.float(), tokenizer=tokenizer)
+            log_ppl = loss.tolist()
+        elif args.sampling_strategy == "data_pruning_w_answers":
+            # first forward pass with prompt responses
+            model_output_1 = model(**target_encoding)
+            # second forward pass with prompt + responses
+            model_output_2 = model(input_ids = prompts_w_answers_encoding['input_ids'], attention_mask = prompts_w_answers_encoding['attention_mask'])
+            loss_on_response = get_clm_loss(target_encoding['input_ids'], model_output_1.logits.float(), tokenizer=tokenizer)
+            loss_on_response_given_instruction = get_clm_loss(prompts_w_answers_encoding['labels'], model_output_2.logits.float(), tokenizer=tokenizer)
+            # get absolute difference between the two losses
+            loss = torch.abs(loss_on_response - loss_on_response_given_instruction)
             log_ppl = loss.tolist()
         elif args.sampling_strategy == "generation_ppl":
             model_output = model.generate(**encoding, **kwargs)
@@ -165,11 +188,12 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
     # model = BetterTransformer.transform(model)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             args.model_config_path,
-            model_max_length=2048,
-            padding_side="left",
+            model_max_length=args.model_max_length,
+            # padding_side="left",
+            padding_side="right",
             use_fast=True,
-            pad_to_multiple_of=8,
-        )
+            # pad_to_multiple_of=8,
+    )
     special_tokens_dict = dict()
     if tokenizer.pad_token is None:
         special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
@@ -208,17 +232,32 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
 def main(args):
     # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
+    # tokenizer = transformers.AutoTokenizer.from_pretrained(
+    #         args.model_config_path,
+    #         model_max_length=args.model_max_length,
+    #         padding_side="right",
+    #         use_fast=True,
+    # )
+    # special_tokens_dict = dict()
+    # if tokenizer.pad_token is None:
+    #     special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    # if tokenizer.eos_token is None:
+    #     special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    # if tokenizer.bos_token is None:
+    #     special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    # if tokenizer.unk_token is None:
+    #     special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+    # tokenizer.add_special_tokens(special_tokens_dict)
+    # eval_preproc = partial(apply_conv_template)
+    # pool_data = pool_data.map(eval_preproc)
+    # pool_data = pool_data.filter(lambda x: len(tokenizer(x['prompt']).input_ids) < args.model_max_length)
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
     pool_data = pool_data.shuffle(seed=args.seed)
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
     al_data_count = int(len(pool_data)*args.al_data_fraction)
-    # ### TEMP ###
-    # pool_data = pool_data.select(range(pool_data_count))
-    # ### TEMP ###
     sampled_data = pool_data.select(range(args.num_acquisition_samples))
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     
-    # model_path = f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_self_conf"
     initial_run = True
     resume = args.resume
     if resume:
@@ -353,7 +392,9 @@ def main(args):
                 # dataset_w_ppl = dataset_w_ppl.sort('ppl')
                 dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
                 print(f"Most uncertain example: {dataset_w_ppl['input'][0]}")
-
+                if args.plot_ppl_hist:
+                    plt.hist(dataset_w_ppl['ppl'], bins=100)
+                    plt.savefig(f"{args.al_data_fraction}_ppl_hist_{steps}.png")
             # we don't want to add more data than the total data count
             if len(sampled_data)+args.num_acquisition_samples <= al_data_count:
                 num_acquisition_samples = args.num_acquisition_samples
@@ -373,39 +414,31 @@ def main(args):
                 examples_per_bucket = num_acquisition_samples//args.num_k
                 total_acquisitions = 0
                 for i in range(args.num_k):
-                    data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket))
+                    if args.pick_samples_from == "top":
+                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket))
+                    elif args.pick_samples_from == "bottom":
+                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(len(dataset_w_ppl)-examples_per_bucket, len(dataset_w_ppl)))
+                    elif args.pick_samples_from == "uniform":
+                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket))
                     total_acquisitions += len(data_shard)
                     if i == args.num_k-1 and total_acquisitions < num_acquisition_samples:
-                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+                        if args.pick_samples_from == "top":
+                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+                        elif args.pick_samples_from == "bottom":
+                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(len(dataset_w_ppl)-examples_per_bucket-num_acquisition_samples+total_acquisitions, len(dataset_w_ppl)))
+                        elif args.pick_samples_from == "uniform":
+                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
                     stratified_data.append(data_shard)
                 acquisition_samples = datasets.concatenate_datasets(stratified_data)
             else:
-                acquisition_samples = dataset_w_ppl.select(range(num_acquisition_samples))
-            # else:
-            #     if args.stratification_strategy == "mixed":
-            #         # select 70% of the data from the top with high ppl and 30% of the data with low ppl
-            #         samples_to_be_added = al_data_count-len(sampled_data)
-            #         top_70 = int(args.mixed_sampling_factor*samples_to_be_added)
-            #         bottom_30 = samples_to_be_added - top_70
-            #         top_70_data = dataset_w_ppl.select(range(top_70))
-            #         # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
-            #         bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
-            #         acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
-            #     elif args.stratification_strategy == "bucket":
-            #         stratified_data = []
-            #         num_acquisition_samples = al_data_count-len(sampled_data)
-            #         examples_per_bucket = num_acquisition_samples//args.num_k
-            #         total_acquisitions = 0
-            #         for i in range(args.num_k):
-            #             data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i).select(range(examples_per_bucket))
-            #             total_acquisitions += len(data_shard)
-            #             if i == args.num_k-1 and total_acquisitions < num_acquisition_samples:
-            #                 data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
-            #             stratified_data.append(data_shard)
-            #         acquisition_samples = datasets.concatenate_datasets(stratified_data)
-            #     else:
-            #         acquisition_samples = dataset_w_ppl.select(range(al_data_count-len(sampled_data)))
-            # acquisition_samples = acquisition_samples.remove_columns('ppl')
+                if args.pick_samples_from == "top":
+                    acquisition_samples = dataset_w_ppl.select(range(num_acquisition_samples))
+                elif args.pick_samples_from == "bottom":
+                    acquisition_samples = dataset_w_ppl.select(range(len(dataset_w_ppl)-num_acquisition_samples, len(dataset_w_ppl)))
+                else:
+                    # print error message
+                    print("Choose a valid 'pick_samples_from' option")
+                    raise NotImplementedError
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(f"{args.save_file_name}")
 
@@ -446,7 +479,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_config_path", default="/sensei-fs/users/ksaifullah/llama2_7B_hf", type=str)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--template_type", default="alpaca", type=str)
-    parser.add_argument("--file_path", default="datasets/dolphin.jsonl", type=str)
+    parser.add_argument("--file_path", default="/sensei-fs/users/ksaifullah/dolphin_1024_ctx.jsonl", type=str)
     parser.add_argument("--save_file_name", default="outputs/al_train_dataset.jsonl", type=str)
     parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--cluster_data_fraction", default=0.001, type=float)
@@ -460,9 +493,12 @@ if __name__ == "__main__":
     parser.add_argument("--sampling_strategy", default="forward_ppl", type=str, help="Sampling strategy for AL.")
     parser.add_argument("--num_acquisition_samples", default=1000, type=int)
     parser.add_argument("--stratification_strategy", default="greedy", type=str, help="Sampling strategy for AL.")
+    parser.add_argument("--pick_samples_from", type=str, choices=["top", "bottom", "uniform"], default="top")
     parser.add_argument("--mixed_sampling_factor", default=0.7, type=float)
     parser.add_argument("--num_k", default=5, type=int)
     parser.add_argument("--decay_k", action='store_true', help="Decay the number of buckets.")
+    parser.add_argument("--model_max_length", default=1024, type=int, help="Model max length.")
+    parser.add_argument("--plot_ppl_hist", action='store_true', help="Plot the histogram of ppl.")
     args = parser.parse_args()
     print(args)
     main(args)
