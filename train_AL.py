@@ -65,12 +65,12 @@ def get_model_opt_scheduler(added_tokens, model_config_path, max_steps=1000, war
     scheduler = get_cosine_schedule_with_warmup(opt, int(max_steps*warmup_ratio), num_training_steps=max_steps)
     return model, opt, scheduler
     
-def get_dataloader_and_sampler(train_dataset, data_collator, batch_size, rank, world_size=4):
+def get_dataloader_and_sampler(train_dataset, data_collator, batch_size, rank, world_size=4, seed=0):
     sampler = DistributedSampler(
                     train_dataset,
                     num_replicas=world_size,
                     rank=rank,
-                    seed=0,
+                    seed=seed,
                 )
     return DataLoader(
         train_dataset,
@@ -174,14 +174,16 @@ def fsdp_main(rank, world_size, args):
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
     tokenizer.add_special_tokens(special_tokens_dict) # no need to resize model embedding because its been resized during empty model loading
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed, efficient_load=True, filtering_method=args.filtering_method)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.seed, efficient_load=True, filtering_method=args.filtering_method)
     train_dataset = data_module['train_dataset']
     data_collator = data_module['data_collator']
-    dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
+    dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size, seed=args.seed)
     # next(iter(dataloader_full)) # this is to make sure that the dataloader is initialized properly
     args.max_steps = (len(train_dataset) * args.num_epochs)//(args.batch_size*world_size*args.accumulation_steps)
     args.save_steps = ((len(train_dataset) * args.num_epochs)/(args.batch_size*world_size*args.accumulation_steps))//10
+    print("="*20)
     print("max_steps", args.max_steps, "save_steps", args.save_steps)
+    print("="*20)
     # updating the dataloader to the right state
     step_count = start_step_count
     sub_step_count = step_count * args.accumulation_steps
@@ -361,7 +363,7 @@ if __name__ == '__main__':
     # args.checkpoint_path/$step_count/opt/shard_$rank.pt
     parser.add_argument("--data_path", type=str, default="datasets/alpaca-train.jsonl")
     parser.add_argument("--data_fraction", type=float, default=1.0, help="fraction of data to use for training should be between 1 and 0")
-    parser.add_argument("--sample_seed", type=int, default=42, help="the random seed used for sampling a fraction of the data")
+    parser.add_argument("--seed", type=int, default=42, help="the random seed used for sampling a fraction of the data")
     parser.add_argument("--resume", action='store_true')
     parser.add_argument("--max_steps", type=int, default=52002*3//128)
     parser.add_argument("--warmup_ratio", type=float, default=0.03)
