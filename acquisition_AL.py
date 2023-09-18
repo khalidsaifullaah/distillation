@@ -430,15 +430,17 @@ def main(args):
                             data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
                     stratified_data.append(data_shard)
                 acquisition_samples = datasets.concatenate_datasets(stratified_data)
-            else:
+            elif args.stratification_strategy == "greedy":
                 if args.pick_samples_from == "top":
                     acquisition_samples = dataset_w_ppl.select(range(num_acquisition_samples))
                 elif args.pick_samples_from == "bottom":
                     acquisition_samples = dataset_w_ppl.select(range(len(dataset_w_ppl)-num_acquisition_samples, len(dataset_w_ppl)))
                 else:
-                    # print error message
                     print("Choose a valid 'pick_samples_from' option")
                     raise NotImplementedError
+            else:
+                print("Choose a valid 'stratification_strategy' option")
+                raise NotImplementedError
             sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(f"{args.save_file_name}")
 
