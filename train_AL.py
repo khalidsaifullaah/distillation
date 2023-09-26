@@ -1,3 +1,12 @@
+# Make it more memory efficient by monkey patching the LLaMA model with FlashAttn.
+
+# Need to call this before importing transformers.
+from llama2_flash_attn_monkey_patch import (
+    replace_llama_attn_with_flash_attn,
+)
+
+replace_llama_attn_with_flash_attn()
+
 import os
 import time
 import argparse
@@ -155,7 +164,7 @@ def fsdp_main(rank, world_size, args):
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
-                model_max_length=1024,
+                model_max_length=args.model_context_length,
                 padding_side="right",
                 # use_fast=False,
             )
@@ -381,6 +390,7 @@ if __name__ == '__main__':
     parser.add_argument("--act_checkpointing", action='store_true')
     parser.add_argument("--save_steps", type=int, default=(52002*3/128)//10)
     parser.add_argument("--accumulation_steps", type=int, default=32)
+    parser.add_argument("--model_context_length", type=int, default=1024)
 
     # wandb associated arguments
     parser.add_argument("--wandb", action='store_true')

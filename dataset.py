@@ -29,16 +29,40 @@ from datasets import Dataset as HFDataset
 
 IGNORE_INDEX = -100
 PROMPT_DICT = {
-    "prompt_input": (
-        "Below is an instruction that describes a task, paired with an input that provides further context. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
-    ),
-    "prompt_no_input": (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{input}\n\n### Response:"
-    ),
+    "dolphin": {
+        "prompt_input": (
+            "Below is an instruction that describes a task, paired with an input that provides further context. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
+        ),
+        "prompt_no_input": (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{input}\n\n### Response:"
+        ),},
+    "alpaca": {    
+        "prompt_input": (
+            "Below is an instruction that describes a task, paired with an input that provides further context. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
+        ),
+        "prompt_no_input": (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Response:"
+        )},
+
+}
+
+column_mappting = {
+    'instruction': 'instruction',
+    'Instruction': 'instruction',
+    'input': 'input',
+    'Input': 'input',
+    'context': 'input',
+    'output': 'output',
+    'Output': 'output',
+    'response': 'output'
 }
 
 def _make_r_io_base(f, mode: str):
@@ -98,7 +122,10 @@ class SupervisedDataset(Dataset):
         logging.warning("Loading data...")
         if efficient_load:
             data_dict = load_dataset('json', data_files=data_path, split='train')
-            used_data_count = int(len(data_dict)*data_fraction)
+            if data_fraction > 1:
+                used_data_count = int(data_fraction)
+            else:
+                used_data_count = int(len(data_dict)*data_fraction)
             if filtering_method == 'random':
                 data_dict = data_dict.shuffle(seed=seed).select(range(used_data_count))
             elif filtering_method == 'no_shuffle':
@@ -127,19 +154,22 @@ class SupervisedDataset(Dataset):
             print(f"using {used_data_count} data out of {len(data_dict)}")
             columns = data_dict.column_names
             # changing column names
-            if columns[0] != 'instruction':
-                data_dict = data_dict.rename_column(columns[0], 'instruction')
-            if columns[1] != 'input':
-                data_dict = data_dict.rename_column(columns[1], 'input')
-            if columns[2] != 'output':
-                data_dict = data_dict.rename_column(columns[2], 'output')
+            print(f"changing column names from {columns[:3]} to {[column_mappting[c] for c in columns[:3]]}")
+            if columns[0] != column_mappting[columns[0]]:
+                data_dict = data_dict.rename_column(columns[0], column_mappting[columns[0]])
+            if columns[1] != column_mappting[columns[1]]:
+                data_dict = data_dict.rename_column(columns[1], column_mappting[columns[1]])
+            if columns[2] != column_mappting[columns[2]]:
+                data_dict = data_dict.rename_column(columns[2], column_mappting[columns[2]])
             logging.warning("Formatting inputs...")
-            prompt_input, prompt_no_input = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"]
+            data_format = "alpaca" if "dolly" in data_path or "alpaca" in data_path else "dolphin"
+            prompt_input, prompt_no_input = PROMPT_DICT[data_format]["prompt_input"], PROMPT_DICT[data_format]["prompt_no_input"]
             def _format_data(examples):
                 output = []
                 for row in zip(examples["instruction"], examples["input"], examples["output"]):
                     examples = {"instruction": row[0], "input": row[1], "output": row[2]}
-                    if examples.get("instruction", "") != "":
+                    context_col_name = "input" if "dolly" in data_path or "alpaca" in data_path else "instruction"
+                    if examples.get(context_col_name, "") != "":
                         output += [prompt_input.format_map(examples)]
                     else:
                         output += [prompt_no_input.format_map(examples)]

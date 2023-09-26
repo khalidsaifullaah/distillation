@@ -254,7 +254,10 @@ def main(args):
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
     pool_data = pool_data.shuffle(seed=args.seed)
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
-    al_data_count = int(len(pool_data)*args.al_data_fraction)
+    if args.al_data_fraction > 1:
+        al_data_count = int(args.al_data_fraction)
+    else:
+        al_data_count = int(len(pool_data)*args.al_data_fraction)
     sampled_data = pool_data.select(range(args.num_acquisition_samples))
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     

@@ -239,3 +239,11 @@ def add_padding_token(tokenizer):
 # # dataset = dataset.select(range(1000))
 # # save the dataset in .jsonl format
 # dataset.to_json(f"datasets/dolphin.jsonl")
+
+# from datasets import load_dataset
+# # # load ehartford/dolphin dataset from huggingface
+# dataset = load_dataset("databricks/databricks-dolly-15k", split="train")
+# # # select the first 1000 samples
+# # # dataset = dataset.select(range(1000))
+# # # save the dataset in .jsonl format
+# dataset.to_json(f"/sensei-fs/users/ksaifullah/databricks-dolly-15k.jsonl")

@@ -100,7 +100,7 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
     model.eval()
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             args.model_config_path,
-            model_max_length=2048,
+            model_max_length=args.model_context_length,
             padding_side="left",
             use_fast=True,
             pad_to_multiple_of=8,
@@ -147,6 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_file_name", default="outputs/answers/self-instruct_llama7B.jsonl", type=str)
     parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--debug", action='store_true', help="This reduce the number of generation examples to 4, so that we can debug faster.")
+    parser.add_argument("--model_context_length", default=2048, type=int)
     args = parser.parse_args()
     
     if "dolly" in args.file_path or "vicuna" in args.file_path or "user_oriented_instructions" in args.file_path:
