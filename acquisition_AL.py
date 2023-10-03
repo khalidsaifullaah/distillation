@@ -34,21 +34,45 @@ DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 PROMPT_DICT = {
-    "prompt_input": (
-        "Below is an instruction that describes a task, paired with an input that provides further context. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
-    ),
-    "prompt_no_input": (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n{input}\n\n### Response:"
-    ),
+    "dolphin": {
+        "prompt_input": (
+            "Below is an instruction that describes a task, paired with an input that provides further context. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
+        ),
+        "prompt_no_input": (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{input}\n\n### Response:"
+        ),},
+    "alpaca": {    
+        "prompt_input": (
+            "Below is an instruction that describes a task, paired with an input that provides further context. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:"
+        ),
+        "prompt_no_input": (
+            "Below is an instruction that describes a task. "
+            "Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{instruction}\n\n### Response:"
+        )},
     "confidence_prompt": (
         "Below is an instruction that describes a task. "
         "Write a response that appropriately completes the request.\n\n"
         "### Instruction:\nHere's a user query: '{input}'\nNow, looking at the user query respond whether you know the answer or not (Please only respond with 'yes' or 'no')\n\n### Response:"
-    ),
+        ),
+
+}
+
+column_mappting = {
+    'instruction': 'instruction',
+    'Instruction': 'instruction',
+    'input': 'input',
+    'Input': 'input',
+    'context': 'input',
+    'output': 'output',
+    'Output': 'output',
+    'response': 'output'
 }
 
 class StopOnTokens(StoppingCriteria):
@@ -86,9 +110,11 @@ def smart_tokenizer_and_embedding_resize(
 
 def apply_conv_template(example):
     # preprocess instructions into prompted inputs
-    prompt_input, prompt_no_input, confidence_prompt = PROMPT_DICT["prompt_input"], PROMPT_DICT["prompt_no_input"], PROMPT_DICT["confidence_prompt"]
+    data_format = "alpaca" if "dolly" in args.file_path or "alpaca" in args.file_path else "dolphin"
+    prompt_input, prompt_no_input, confidence_prompt = PROMPT_DICT[data_format]["prompt_input"], PROMPT_DICT[data_format]["prompt_no_input"], PROMPT_DICT["confidence_prompt"]
     if args.sampling_strategy != "self_ask":
-        source  = prompt_input.format_map(example) if example.get("instruction", "") != "" else prompt_no_input.format_map(example)
+        context_col_name = "input" if "dolly" in args.file_path or "alpaca" in args.file_path else "instruction"
+        source  = prompt_input.format_map(example) if example.get(context_col_name, "") != "" else prompt_no_input.format_map(example)
     else:
         source = confidence_prompt.format_map(example)
     example.update({
@@ -113,7 +139,7 @@ def get_clm_loss(labels, lm_logits, tokenizer=None):
     loss_per_example = loss.view(shift_logits.size(0), shift_logits.size(1)).mean(axis=1)
     return loss_per_example
 
-def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None):
+def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None, args=None):
     prompt, targets = example['prompt'], example['output']
     if args.sampling_strategy == "data_pruning_w_answers":
         data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
@@ -179,7 +205,7 @@ def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None)
     # return example
     return log_ppl
 
-def inference_worker(rank, sharded_model_path, data_partition, result_list):
+def inference_worker(rank, sharded_model_path, data_partition, result_list, args):
     from optimum.bettertransformer import BetterTransformer
     gpu = rank
     model_config = transformers.AutoConfig.from_pretrained(args.model_config_path)
@@ -216,7 +242,8 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
                     model=model,  
                     tokenizer=tokenizer,
                     device=gpu,
-                    kwargs=generate_kwargs)
+                    kwargs=generate_kwargs,
+                    args=args)
 
     ppl_list = []
     for batch in tqdm(data_partition.iter(batch_size=args.batch_size)):
@@ -232,6 +259,15 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list):
 def main(args):
     # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
+    columns = pool_data.column_names
+    # changing column names
+    print(f"changing column names from {columns[:3]} to {[column_mappting[c] for c in columns[:3]]}")
+    if columns[0] != column_mappting[columns[0]]:
+        pool_data = pool_data.rename_column(columns[0], column_mappting[columns[0]])
+    if columns[1] != column_mappting[columns[1]]:
+        pool_data = pool_data.rename_column(columns[1], column_mappting[columns[1]])
+    if columns[2] != column_mappting[columns[2]]:
+        pool_data = pool_data.rename_column(columns[2], column_mappting[columns[2]])
     # tokenizer = transformers.AutoTokenizer.from_pretrained(
     #         args.model_config_path,
     #         model_max_length=args.model_max_length,
@@ -276,15 +312,15 @@ def main(args):
             print(f"steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
             print("#"*100)
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "16", "--dont_save_opt", "--num_epochs", "3", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random", "--model_context_length", "2048"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
             initial_run = False
         else:
             if resume:
                 sharded_model_path = f"{args.resume_checkpoint_path}/{os.listdir(args.resume_checkpoint_path)[0]}/model"
                 prev_data_fraction = args.resume_checkpoint_path.split('dfrac_')[-1].split('_')[0]
-                prev_sampled_data_path = f"outputs/{args.resume_checkpoint_path.split('../')[-1].split('_sharded')[0]}.json"
-                # prev_sampled_data_path = f"outputs/{args.resume_checkpoint_path.split('../')[-1]}"
+                # prev_sampled_data_path = f"outputs/{args.resume_checkpoint_path.split('../')[-1].split('_sharded')[0]}.json"
+                prev_sampled_data_path = args.save_file_name
                 sampled_data = datasets.load_dataset('json', data_files=prev_sampled_data_path, split='train')
                 resume = False
             else:
@@ -338,8 +374,11 @@ def main(args):
                     # ### TEMP ###
                     # shrinked_pool_data = pool_data
                     # ### TEMP ###
-                    pool_data = pool_data.shuffle(seed=args.seed)
-                    shrinked_pool_data = pool_data.select(range(pool_data_count))
+                    if args.cluster_data_fraction == 1:
+                        shrinked_pool_data = pool_data.select(range(len(pool_data)))
+                    else:
+                        pool_data = pool_data.shuffle(seed=args.seed)
+                        shrinked_pool_data = pool_data.select(range(pool_data_count))
                 else:
                     print("Picking pool data from clusters...")
                     with open('/sensei-fs/users/ksaifullah/dolphin_instructions_cluster_sbert.pkl', 'rb') as f:
@@ -368,18 +407,20 @@ def main(args):
 
                     shrinked_pool_data = Dataset.from_dict(shrinked_pool_data)
                 ## preprocess
+                # from IPython import embed; embed()
                 eval_preproc = partial(apply_conv_template)
                 shrinked_pool_data = shrinked_pool_data.map(eval_preproc)
                 print(f"example from shrinked pool data: {shrinked_pool_data['prompt'][0]}")
                 num_processes = num_gpus = torch.cuda.device_count()
                 try:
+                    torch.multiprocessing.set_start_method('spawn')# good solution !!!!
                     mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
                 except RuntimeError:
                     pass
                 result_list = mp.Manager().list()
                 processes = []
                 for rank in range(num_processes):
-                    p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, shrinked_pool_data.shard(num_shards=num_gpus, index=rank), result_list))
+                    p = mp.Process(target=inference_worker, args=(rank, sharded_model_path, shrinked_pool_data.shard(num_shards=num_gpus, index=rank), result_list, args))
                     p.start()
                     processes.append(p)
 
@@ -394,7 +435,7 @@ def main(args):
                 dataset_w_ppl = datasets.concatenate_datasets(result_list)
                 # dataset_w_ppl = dataset_w_ppl.sort('ppl')
                 dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
-                print(f"Most uncertain example: {dataset_w_ppl['input'][0]}")
+                print(f"Most uncertain example: {dataset_w_ppl['instruction'][0]}")
                 if args.plot_ppl_hist:
                     plt.hist(dataset_w_ppl['ppl'], bins=100)
                     plt.savefig(f"{args.al_data_fraction}_ppl_hist_{steps}.png")
@@ -461,7 +502,7 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random", "--model_context_length", "2048"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
@@ -478,6 +519,10 @@ def main(args):
 
 
 if __name__ == "__main__":
+    try:
+        mp.set_start_method('spawn')  # Required for CUDA in multiprocessing
+    except RuntimeError:
+        pass
     parser = argparse.ArgumentParser()
     parser.add_argument("--init_checkpoint_path", default="/sensei-fs/users/ksaifullah/llama2_7B_sharded", type=str)
     parser.add_argument("--model_path", default=None, type=str)
