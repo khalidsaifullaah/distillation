@@ -502,12 +502,12 @@ def main(args):
             print("#"*100)
             # os.system(f"rm -rf {model_path}_sharded")
             cmd = ["python", "train_AL.py"]
-            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "8", "--dont_save_opt", "--num_epochs", "2", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random", "--model_context_length", "2048"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
+            cmd.extend(["--init_checkpoint_path", f"{args.init_checkpoint_path}", "--model_config_path", f"{args.model_config_path}", "--checkpoint_path", f"{model_path}_sharded", "--wrapped_class_name", "LlamaDecoderLayer", "--data_path", f"{args.save_file_name}", "--hack", "--batch_size", "1", "--accumulation_steps", "16", "--dont_save_opt", "--num_epochs", "3", "--lr", f"{args.lr}", "--seed", f"{args.seed}", "--filtering_method", "random", "--model_context_length", "2048"]) # , "--wandb", "--wb_name", f"s_{steps}_{model_path.split('/')[-1]}", "--wb_project", "al_data_distillation"
             result = subprocess.run(cmd)
 
     end_time = time.time()
     print(f"Total time taken: {(end_time-start_time)/60} minutes")
-    with open('al_experiments_runtime.txt', 'a+') as f:
+    with open('/sensei-fs/users/ksaifullah/al_experiments_runtime.txt', 'a+') as f:
         f.write(f"{model_path}: {(end_time-start_time)/60} minutes\n")
 
     # print("#"*100)
