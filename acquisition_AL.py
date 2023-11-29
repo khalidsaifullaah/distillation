@@ -75,6 +75,8 @@ column_mappting = {
     'response': 'output'
 }
 
+no_initial_runs = ["instruction_length", "random"]  # these sampling strategies don't require initial runs
+
 class StopOnTokens(StoppingCriteria):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         stop_ids = [2]
@@ -158,12 +160,15 @@ def compute_perplexity_batched(example, model, tokenizer, device=0, kwargs=None,
         encoding.pop('token_type_ids', None)
         encoding = {k: v.to(f"cuda:{device}") for k,v in encoding.items()}
     with torch.no_grad():
-        if args.sampling_strategy == "forward_ppl":
+        if args.sampling_strategy == "forward_ppl" or args.sampling_strategy == "length_and_ppl":
             model_output = model(**encoding)
             if torch.isnan(model_output.logits).any():
                 print("NAN")
             loss = get_clm_loss(encoding['input_ids'], model_output.logits.float(), tokenizer=tokenizer)
             log_ppl = loss.tolist()
+            # normalize all the examples losses by num tokens in their encodings
+            # log_ppl = [ppl/len(encoding['input_ids'][i]) for i,ppl in enumerate(log_ppl)]
+
         elif args.sampling_strategy == "data_pruning_w_answers":
             # first forward pass with prompt responses
             model_output_1 = model(**target_encoding)
@@ -249,18 +254,16 @@ def inference_worker(rank, sharded_model_path, data_partition, result_list, args
     for batch in tqdm(data_partition.iter(batch_size=args.batch_size)):
         batch_ppl = get_ppl(batch)
         ppl_list.extend(batch_ppl)
-    dataset_w_ppl = data_partition.add_column('ppl', ppl_list)
-    result_list.append(dataset_w_ppl)
+    dataset_w_score = data_partition.add_column('ppl', ppl_list)
+    result_list.append(dataset_w_score)
     # model = model.cpu()
 
     return
 
 
 def main(args):
-    # torch.set_num_threads(1)
     pool_data = datasets.load_dataset('json', data_files=args.file_path, split='train')
     columns = pool_data.column_names
-    # changing column names
     print(f"changing column names from {columns[:3]} to {[column_mappting[c] for c in columns[:3]]}")
     if columns[0] != column_mappting[columns[0]]:
         pool_data = pool_data.rename_column(columns[0], column_mappting[columns[0]])
@@ -268,38 +271,46 @@ def main(args):
         pool_data = pool_data.rename_column(columns[1], column_mappting[columns[1]])
     if columns[2] != column_mappting[columns[2]]:
         pool_data = pool_data.rename_column(columns[2], column_mappting[columns[2]])
-    # tokenizer = transformers.AutoTokenizer.from_pretrained(
-    #         args.model_config_path,
-    #         model_max_length=args.model_max_length,
-    #         padding_side="right",
-    #         use_fast=True,
-    # )
-    # special_tokens_dict = dict()
-    # if tokenizer.pad_token is None:
-    #     special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-    # if tokenizer.eos_token is None:
-    #     special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
-    # if tokenizer.bos_token is None:
-    #     special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
-    # if tokenizer.unk_token is None:
-    #     special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
-    # tokenizer.add_special_tokens(special_tokens_dict)
-    # eval_preproc = partial(apply_conv_template)
-    # pool_data = pool_data.map(eval_preproc)
-    # pool_data = pool_data.filter(lambda x: len(tokenizer(x['prompt']).input_ids) < args.model_max_length)
+    if args.sampling_strategy == "instruction_length" or args.sampling_strategy == "length_and_ppl":
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+                args.model_config_path,
+                model_max_length=args.model_max_length,
+                padding_side="right",
+                use_fast=True,
+        )
+        special_tokens_dict = dict()
+        if tokenizer.pad_token is None:
+            special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+        if tokenizer.eos_token is None:
+            special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+        if tokenizer.bos_token is None:
+            special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+        if tokenizer.unk_token is None:
+            special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+        tokenizer.add_special_tokens(special_tokens_dict)
+        # eval_preproc = partial(apply_conv_template)
+        # pool_data = pool_data.map(eval_preproc)
+        # pool_data = pool_data.filter(lambda x: len(tokenizer(x['prompt']).input_ids) < args.model_max_length)
+        pool_data = pool_data.map(lambda x: {"inst_len": len(tokenizer(x['instruction']).input_ids)})
+        pool_data = pool_data.sort('inst_len')
+
     pool_data = pool_data.add_column('id', list(range(len(pool_data))))
-    pool_data = pool_data.shuffle(seed=args.seed)
     pool_data_count = int(len(pool_data)*args.cluster_data_fraction)
+    
     if args.al_data_fraction > 1:
-        al_data_count = int(args.al_data_fraction)
+        al_data_count = int(args.al_data_fraction)  # if we want to acquire a fixed number of the pool data
     else:
-        al_data_count = int(len(pool_data)*args.al_data_fraction)
-    sampled_data = pool_data.select(range(args.num_acquisition_samples))
+        al_data_count = int(len(pool_data)*args.al_data_fraction)   # if we want to acquire a fraction of the pool data
+    if args.sampling_strategy not in no_initial_runs:
+        pool_data = pool_data.shuffle(seed=args.seed)
+        sampled_data = pool_data.select(range(args.num_acquisition_samples))
+    else:
+        sampled_data = []
     model_path = args.model_path if args.model_path else f"/home/ksaifullah/al_dolphin_llama2_7B_dfrac_{args.al_data_fraction}_poolfrac_{args.cluster_data_fraction}_forward_ppl"
     
     initial_run = True
     resume = args.resume
-    if resume:
+    if resume or args.sampling_strategy in no_initial_runs:
         initial_run = False
     steps = 0
     start_time = time.time()
@@ -324,7 +335,8 @@ def main(args):
                 sampled_data = datasets.load_dataset('json', data_files=prev_sampled_data_path, split='train')
                 resume = False
             else:
-                sharded_model_path = f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model"
+                if args.sampling_strategy not in no_initial_runs:
+                    sharded_model_path = f"{model_path}_sharded/{os.listdir(f'{model_path}_sharded')[0]}/model"
             print("#"*100)
             print("Sampling new data")
             print(f"Steps: {steps}, sampled_data size: {len(sampled_data)}, total data: {al_data_count}")
@@ -354,16 +366,23 @@ def main(args):
                     shrinked_pool_data['input'].append(pool_data[sample_id]['input'])
                     shrinked_pool_data['output'].append(pool_data[sample_id]['output'])
 
-                dataset_w_ppl = Dataset.from_dict(shrinked_pool_data)
+                dataset_w_score = Dataset.from_dict(shrinked_pool_data)
             elif args.sampling_strategy == "random":
-                print("removing sampled data from pool")
-                pool_data.set_format('pandas')
-                df = pool_data[:]
-                df = df[~df['id'].isin(set(sampled_data['id']))]
-                pool_data = Dataset.from_pandas(df, preserve_index=False)
                 pool_data = pool_data.shuffle(seed=args.seed)
-                shrinked_pool_data = pool_data.select(range(args.num_acquisition_samples))
-                dataset_w_ppl = shrinked_pool_data
+                if args.cluster_data_fraction == 1:
+                    shrinked_pool_data = pool_data.select(range(len(pool_data)))
+                else:
+                    shrinked_pool_data = pool_data.select(range(pool_data_count))
+                if args.num_acquisition_samples == 1:
+                    args.num_acquisition_samples = len(pool_data)
+                dataset_w_score = shrinked_pool_data
+            elif args.sampling_strategy == "instruction_length":
+                if args.cluster_data_fraction == 1:
+                    shrinked_pool_data = pool_data.select(range(len(pool_data)))
+                else:
+                    pool_data = pool_data.shuffle(seed=args.seed)
+                    shrinked_pool_data = pool_data.select(range(pool_data_count))
+                dataset_w_score = shrinked_pool_data.sort('inst_len')
             else:
                 if args.random_pool_fraction:
                     print("removing sampled data from pool")
@@ -432,12 +451,15 @@ def main(args):
                 # del model
                 gc.collect()
                 torch.cuda.empty_cache()
-                dataset_w_ppl = datasets.concatenate_datasets(result_list)
-                # dataset_w_ppl = dataset_w_ppl.sort('ppl')
-                dataset_w_ppl = dataset_w_ppl.sort('ppl', reverse=True)
-                print(f"Most uncertain example: {dataset_w_ppl['instruction'][0]}")
+                dataset_w_score = datasets.concatenate_datasets(result_list)
+                if args.sampling_strategy == "length_and_ppl":
+                    dataset_w_score = dataset_w_score.sort(['inst_len', 'ppl'])
+                else:
+                    dataset_w_score = dataset_w_score.sort('ppl', reverse=True)
+                    # dataset_w_score = dataset_w_score.sort('ppl')
+                print(f"Most uncertain example: {dataset_w_score[0]}")
                 if args.plot_ppl_hist:
-                    plt.hist(dataset_w_ppl['ppl'], bins=100)
+                    plt.hist(dataset_w_score['ppl'], bins=100)
                     plt.savefig(f"{args.al_data_fraction}_ppl_hist_{steps}.png")
             # we don't want to add more data than the total data count
             if len(sampled_data)+args.num_acquisition_samples <= al_data_count:
@@ -448,9 +470,9 @@ def main(args):
                 # select 70% of the data from the top with high ppl and 30% of the data with low ppl
                 top_70 = int(args.mixed_sampling_factor*num_acquisition_samples)
                 bottom_30 = num_acquisition_samples - top_70
-                top_70_data = dataset_w_ppl.select(range(top_70))
-                # bottom_30_data = dataset_w_ppl.select(range(len(dataset_w_ppl)-bottom_30, len(dataset_w_ppl)))
-                bottom_30_data = dataset_w_ppl.select(range(top_70, len(dataset_w_ppl))).shuffle(seed=args.seed).select(range(bottom_30))
+                top_70_data = dataset_w_score.select(range(top_70))
+                # bottom_30_data = dataset_w_score.select(range(len(dataset_w_score)-bottom_30, len(dataset_w_score)))
+                bottom_30_data = dataset_w_score.select(range(top_70, len(dataset_w_score))).shuffle(seed=args.seed).select(range(bottom_30))
                 acquisition_samples = datasets.concatenate_datasets([top_70_data, bottom_30_data])
             elif args.stratification_strategy == "bucket":
                 print("Using bucketing")
@@ -459,33 +481,38 @@ def main(args):
                 total_acquisitions = 0
                 for i in range(args.num_k):
                     if args.pick_samples_from == "top":
-                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket))
+                        data_shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket))
                     elif args.pick_samples_from == "bottom":
-                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(len(dataset_w_ppl)-examples_per_bucket, len(dataset_w_ppl)))
+                        shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True)
+                        data_shard = shard.select(range(len(shard)-examples_per_bucket, len(shard)))
                     elif args.pick_samples_from == "uniform":
-                        data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket))
+                        data_shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket))
                     total_acquisitions += len(data_shard)
                     if i == args.num_k-1 and total_acquisitions < num_acquisition_samples:
                         if args.pick_samples_from == "top":
-                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+                            data_shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
                         elif args.pick_samples_from == "bottom":
-                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).select(range(len(dataset_w_ppl)-examples_per_bucket-num_acquisition_samples+total_acquisitions, len(dataset_w_ppl)))
+                            shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True)
+                            data_shard = shard.select(range(len(shard)-examples_per_bucket-num_acquisition_samples+total_acquisitions, len(shard)))
                         elif args.pick_samples_from == "uniform":
-                            data_shard = dataset_w_ppl.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
+                            data_shard = dataset_w_score.shard(num_shards=args.num_k, index=i, contiguous=True).shuffle(seed=args.seed).select(range(examples_per_bucket+num_acquisition_samples-total_acquisitions))
                     stratified_data.append(data_shard)
                 acquisition_samples = datasets.concatenate_datasets(stratified_data)
             elif args.stratification_strategy == "greedy":
                 if args.pick_samples_from == "top":
-                    acquisition_samples = dataset_w_ppl.select(range(num_acquisition_samples))
+                    acquisition_samples = dataset_w_score.select(range(num_acquisition_samples))
                 elif args.pick_samples_from == "bottom":
-                    acquisition_samples = dataset_w_ppl.select(range(len(dataset_w_ppl)-num_acquisition_samples, len(dataset_w_ppl)))
+                    acquisition_samples = dataset_w_score.select(range(len(dataset_w_score)-num_acquisition_samples, len(dataset_w_score)))
                 else:
                     print("Choose a valid 'pick_samples_from' option")
                     raise NotImplementedError
             else:
                 print("Choose a valid 'stratification_strategy' option")
                 raise NotImplementedError
-            sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
+            if args.sampling_strategy in no_initial_runs:
+                sampled_data = acquisition_samples
+            else:
+                sampled_data = datasets.concatenate_datasets([sampled_data, acquisition_samples])
             sampled_data.to_json(f"{args.save_file_name}")
 
             if args.decay_k:
