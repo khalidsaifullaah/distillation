@@ -1,3 +1,12 @@
+# Make it more memory efficient by monkey patching the LLaMA model with FlashAttn.
+
+# Need to call this before importing transformers.
+from llama2_flash_attn_monkey_patch import (
+    replace_llama_attn_with_flash_attn,
+)
+
+replace_llama_attn_with_flash_attn()
+
 import os
 import time
 import argparse
@@ -6,6 +15,7 @@ import random
 
 import torch
 import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
 import torch.nn.functional as F
 import torch.multiprocessing as mp
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
@@ -64,12 +74,12 @@ def get_model_opt_scheduler(added_tokens, model_config_path, max_steps=1000, war
     scheduler = get_cosine_schedule_with_warmup(opt, int(max_steps*warmup_ratio), num_training_steps=max_steps)
     return model, opt, scheduler
     
-def get_dataloader_and_sampler(train_dataset, data_collator, batch_size, rank, world_size=4):
+def get_dataloader_and_sampler(train_dataset, data_collator, batch_size, rank, world_size=4, seed=0):
     sampler = DistributedSampler(
                     train_dataset,
                     num_replicas=world_size,
                     rank=rank,
-                    seed=0,
+                    seed=seed,
                 )
     return DataLoader(
         train_dataset,
@@ -154,7 +164,7 @@ def fsdp_main(rank, world_size, args):
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
                 args.model_config_path,
-                model_max_length=1024,
+                model_max_length=args.model_context_length,
                 padding_side="right",
                 # use_fast=False,
             )
@@ -173,13 +183,16 @@ def fsdp_main(rank, world_size, args):
         special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
     tokenizer.add_special_tokens(special_tokens_dict) # no need to resize model embedding because its been resized during empty model loading
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.sample_seed, efficient_load=True, filtering_method=args.filtering_method)
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_path=args.data_path, data_fraction=args.data_fraction, seed=args.seed, efficient_load=True, filtering_method=args.filtering_method)
     train_dataset = data_module['train_dataset']
     data_collator = data_module['data_collator']
-    dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size)
+    dataloader_full, sampler = get_dataloader_and_sampler(train_dataset=train_dataset, data_collator=data_collator, batch_size=args.batch_size, rank=rank, world_size=world_size, seed=args.seed)
     # next(iter(dataloader_full)) # this is to make sure that the dataloader is initialized properly
     args.max_steps = (len(train_dataset) * args.num_epochs)//(args.batch_size*world_size*args.accumulation_steps)
     args.save_steps = ((len(train_dataset) * args.num_epochs)/(args.batch_size*world_size*args.accumulation_steps))//10
+    print("="*20)
+    print("max_steps", args.max_steps, "save_steps", args.save_steps)
+    print("="*20)
     # updating the dataloader to the right state
     step_count = start_step_count
     sub_step_count = step_count * args.accumulation_steps
@@ -306,16 +319,29 @@ def fsdp_main(rank, world_size, args):
         scheduler.step()
         opt.zero_grad()
 
-        # save the model, optimizer, scheduler
-        # if (step_count+1) % save_steps == 0 or (step_count+1) == args.max_steps:
-        #     if rank == 0:
-        #         print("saving checkpoint", step_count+1)
-        #     save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=args.dont_save_opt)
     if rank == 0:
         print("saving checkpoint", step_count+1)
     save_model_opt_scheduler_states_fsdp(model, opt, scheduler, step_count, args.checkpoint_path, rank, dont_save_opt=True)
+    # save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    # with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
+    #     cpu_state = model.state_dict()
+    #     print(cpu_state)
+    
+    # model_config = transformers.AutoConfig.from_pretrained(args.model_config_path, trust_remote_code=True)
+    # tokenizer = transformers.AutoTokenizer.from_pretrained(args.model_config_path, trust_remote_code=True)
+    # hf_model = transformers.AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).bfloat16()
+    # if args.added_tokens > 0:
+    #     hf_model.resize_token_embeddings(hf_model.config.vocab_size + args.added_tokens)
+    # hf_model.load_state_dict(cpu_state)
+    # hf_model.save_pretrained(args.save_path)
+    # model.save_pretrained(args.checkpoint_path, state_dice=cpu_state)
+    # tokenizer.save_pretrained(args.checkpoint_path)
 
     cleanup()
+
+# def initiate(args):
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -331,10 +357,10 @@ if __name__ == '__main__':
     parser.add_argument("--tmp", type=float, default=0.7, help="the temperature to use for softmax in distillation")
     parser.add_argument("--spike_factor", type=float, default=0.0, help="the weight of the distillation loss")
     parser.add_argument("--no_dist", action='store_true')
-    parser.add_argument("--num_epochs", type=int, default=2)
+    parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--use_hidden_states", action='store_true')
     parser.add_argument("--use_attention_scores", action='store_true')
-    parser.add_argument("--filtering_method", type=str, choices=["random", "cluster"], default="random")
+    parser.add_argument("--filtering_method", type=str, choices=["random", "cluster", "no_shuffle"], default="random")
 
     parser.add_argument("--wrapped_class_name", type=str, choices=["LlamaDecoderLayer", "OPTDecoderLayer", "GPTNeoXLayer", "GPTBlock", "MPTBlock"], default="GPTBlock",
                         help="the name of the class that is wrapped by the FSDP module")
@@ -346,7 +372,7 @@ if __name__ == '__main__':
     # args.checkpoint_path/$step_count/opt/shard_$rank.pt
     parser.add_argument("--data_path", type=str, default="datasets/alpaca-train.jsonl")
     parser.add_argument("--data_fraction", type=float, default=1.0, help="fraction of data to use for training should be between 1 and 0")
-    parser.add_argument("--sample_seed", type=int, default=42, help="the random seed used for sampling a fraction of the data")
+    parser.add_argument("--seed", type=int, default=42, help="the random seed used for sampling a fraction of the data")
     parser.add_argument("--resume", action='store_true')
     parser.add_argument("--max_steps", type=int, default=52002*3//128)
     parser.add_argument("--warmup_ratio", type=float, default=0.03)
@@ -364,6 +390,7 @@ if __name__ == '__main__':
     parser.add_argument("--act_checkpointing", action='store_true')
     parser.add_argument("--save_steps", type=int, default=(52002*3/128)//10)
     parser.add_argument("--accumulation_steps", type=int, default=32)
+    parser.add_argument("--model_context_length", type=int, default=1024)
 
     # wandb associated arguments
     parser.add_argument("--wandb", action='store_true')
@@ -372,6 +399,7 @@ if __name__ == '__main__':
     parser.add_argument("--wb_name", type=str, default="logit_distillation")
     parser.add_argument("--wb_id", type=str, default="adslifjaoeihgaaa")
     args = parser.parse_args()
+    # initiate(args)
     print(args)
     WORLD_SIZE = torch.cuda.device_count()
     if args.port is None:
@@ -380,3 +408,4 @@ if __name__ == '__main__':
         args=(WORLD_SIZE, args),
         nprocs=WORLD_SIZE,
         join=True)
+    print("training finished")
