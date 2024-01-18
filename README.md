@@ -1,13 +1,68 @@
+# Sample efficient instruction tuning for LLMs
+When we have a large pool of unlabeled instruction data available, how can we determine the best instructions to provide to human annotators? One approach is to set up an active learning framework for this task. With abundant unlabeled data, active learning allows us to iteratively select the most informative examples to label. By starting with a small labeled set and iteratively growing it with strategically chosen examples, we can find highly effective instructions much more efficiently than labeling randomly selected data.
+
 # QuickStart
 First, you want to install the environment (assuming that you have conda installed)
 
 `conda env create -f environment.yml`
 
-To finetune 7B llama on the self instruct dataset, run the command below
+To start an experiment of distilling dataset (for 500, 1000, 1500, 2000, 2500, 3000, and 4000 samples respectively) w/ llama 7B, run the command below:
 
-```python train.py --init_checkpoint_path /fs/nexus-scratch/pchiang/llama/7B_sharded --checkpoint_path $YOUR_CHECKPOINT_PATH```
+```shell
+### Stratified bucket (top) ###
+# Define common parameters
+INIT_CHECKPOINT_PATH="/path/of/model/llama2_7B_sharded"
+MODEL_CONFIG_PATH="/path/of/model/llama2_7B_hf"
+DATA_PATH="/path/of/model/databricks-dolly-15k.jsonl"
+LR="--lr 5e-5"
+BATCH_SIZE="--batch_size 4"
+AL_DATA_FRACTIONS=("500" "1000" "1500" "2000" "2500" "3000" "4000")
+PREV_AL_FRACTION=""  # Initialize to an empty string
 
-I have preconverted llama 7B fsdp format and saved it at `/fs/nexus-scratch/pchiang/llama/7B_sharded` I found this to be necessary to reduce the memory footprint during the loading phase.
+for al_fraction in "${AL_DATA_FRACTIONS[@]}"
+do
+  ACQUISITION_MODEL_PATH="/home/ksaifullah/al_dolly_llama2_7B_numdata_${al_fraction}_bucket_stratify_5_top_forward_ppl"
+  EVAL_MODEL_PATH="../al_dolly_llama2_7B_numdata_${al_fraction}_bucket_stratify_5_top_forward_ppl_sharded"
+  EVAL_SAVE_FILE_NAME="/path/of/model/dolly_llama2_7B_outputs/stratify_top/al_dolly_llama2_7B_numdata_${al_fraction}_bucket_stratify_5_top_forward_ppl_seed42.json"
+  # Check if it's not the first iteration
+  if [ -n "$PREV_AL_FRACTION" ]
+  then
+    RESUME="--resume"
+    RESUME_CHECKPOINT_PATH="../al_dolly_llama2_7B_numdata_${PREV_AL_FRACTION}_bucket_stratify_5_top_forward_ppl_sharded"
+  else
+    RESUME=""
+    RESUME_CHECKPOINT_PATH=""  # Leave it empty for the first iteration
+  fi
+  
+  # Aquiring samples from the unlabelled pool and training the model
+  python acquisition_AL.py \
+    --file_path "$DATA_PATH" \
+    --init_checkpoint_path "$INIT_CHECKPOINT_PATH" \
+    --model_config_path "$MODEL_CONFIG_PATH" \
+    $BATCH_SIZE \
+    --al_data_fraction "$al_fraction" \
+    --cluster_data_fraction 1.00 \
+    $LR \
+    --num_acquisition_samples 100 \
+    --random_pool_fraction \
+    --stratification_strategy bucket \
+    --model_path "$ACQUISITION_MODEL_PATH" \
+    --seed 42 \
+    --num_k 5 \
+    --pick_samples_from top \
+    $RESUME \
+    $([ -n "$RESUME_CHECKPOINT_PATH" ] && echo "--resume_checkpoint_path '$RESUME_CHECKPOINT_PATH'")
+
+  # Evaluate the model on Alpaca Eval dataset
+  python eval_generate.py \
+    --sharded_model "$EVAL_MODEL_PATH" \
+    --model_config_path "$MODEL_CONFIG_PATH" \
+    --file_path alpaca_eval \
+    --save_file_name "$EVAL_SAVE_FILE_NAME"
+done
+```
+
+You need to convert llama 7B in fsdp format, It's necessary to reduce the memory footprint during the model loading phase.
 
 # Converting checkpoints from huggingface to fsdp
 
@@ -15,11 +70,7 @@ The `convert_hf_to_fsdp.py` converts huggingface checkpoint to one that can be l
 
 ```python convert_hf_to_fsdp.py --load_path $HF_CHECKPOINT_PATH --save_path $SAVE_PATH ```
 
-# Other things
-There are still many bugs and kinks that have to be worked out in the repository. Some of the things that come into mind are
-
-1. The modification of architecture has to happen before sharding which is quite inconvenient.
-2. the environment file includes many unnecessary things and can probably be improved.
+Similarly, you can use the `convert_fsdp_to_hf.py` script to convert fsdp checkpoints back to hf format.
 
 Feel free to initiate a pull request. I will continue to improve the repo as things move along.
 
